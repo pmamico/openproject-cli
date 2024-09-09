@@ -1,7 +1,12 @@
+# IMPORTANT
+
+This is a fork from [https://github.com/opf/openproject-cli/].  
+Currently I make only MacOS (Darwin) releases.  
+Changes I made from release 0.4.0:  
+* login works with authorized `/api/v3` endpoint
+
 # OpenProject CLI
 
-[![CI](https://github.com/opf/openproject-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/opf/openproject-cli/actions/workflows/ci.yml)
-![GitHub release (latest by date)](https://img.shields.io/github/v/release/opf/openproject-cli)
 
 OpenProject CLI is a tool for operating your OpenProject instances from the command line. Therefore, it provides a
 subset of use cases for OpenProject.
@@ -19,23 +24,22 @@ There are many ways to install the OpenProject CLI:
 
 ### Download executable
 
-Executables are provided for Linux, macOS and Windows (currently Linux x64 only).
+Executables are provided for ~~Linux~~, macOS and ~~Windows~~.
 
-You can find the executables in the [**Releases**](https://github.com/opf/openproject-cli/releases/) section of this
+You can find the executables in the [**Releases**](https://github.com/pmamico/openproject-cli/releases/) section of this
 repository. The latest release is available under
-[https://github.com/opf/openproject-cli/releases/latest](https://github.com/opf/openproject-cli/releases/latest).
+[https://github.com/pmamico/openproject-cli/releases/latest](https://github.com/pmamico/openproject-cli/releases/latest).
 
-Download the zip archive for your operating system and desired version of the OpenProject CLI:
+Download the binary for your operating system and desired version of the OpenProject CLI:
 
 ```shell
-curl -O https://github.com/opf/openproject-cli/releases/download/0.2.0/openproject-cli_linux_x64_X.Y.Z.zip
+curl -O https://github.com/pmamico/openproject-cli/releases/download/0.4.0b-darwin/op-0.4.0b-darwin
 ```
 
-Extract the executable from the zip archive and move the executable to a location that is within your `PATH`:
+Move the executable to a location that is within your `PATH`:
 
 ```shell
-unzip openproject-cli_linux_x64_X.Y.Z.zip
-sudo mv op /usr/local/bin
+sudo mv op-0.4.0b-darwin /usr/local/bin/op
 ```
 
 Check if the executable is working:
