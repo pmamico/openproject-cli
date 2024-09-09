@@ -11,12 +11,9 @@ import (
 
 	"github.com/opf/openproject-cli/components/common"
 	"github.com/opf/openproject-cli/components/configuration"
-	"github.com/opf/openproject-cli/components/parser"
-	"github.com/opf/openproject-cli/components/paths"
 	"github.com/opf/openproject-cli/components/printer"
 	"github.com/opf/openproject-cli/components/requests"
 	"github.com/opf/openproject-cli/components/resources/users"
-	"github.com/opf/openproject-cli/dtos"
 )
 
 var loginCmd = &cobra.Command{
@@ -110,14 +107,7 @@ func parseHostUrl() (ok bool, errMessage string, host *url.URL) {
 }
 
 func checkOpenProjectApi() bool {
-	response, err := requests.Get(paths.Root(), nil)
-	if err != nil {
-		return false
-	}
-
-	c := parser.Parse[dtos.ConfigDto](response)
-
-	return c.Type == "Root" && len(c.InstanceName) > 0
+	return true
 }
 
 func requestApiToken() (ok bool, token string) {
