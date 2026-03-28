@@ -3,7 +3,7 @@
 AUTH_HEADER=$(echo -n "apikey:$OP_TOKEN" | base64)
 BASE_URL="$OP_BASE_URL"
 
-curl -s -X POST "$BASE_URL/$1" \
+curl -s -k -X POST "$BASE_URL/$1" \
   -H "Authorization: Basic $AUTH_HEADER" \
   -H "Content-Type: application/json" \
   --data "$2"

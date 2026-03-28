@@ -23,7 +23,7 @@ fi
 BASE_URL="${OP_BASE_URL%/}"
 AUTH_HEADER="$(printf "apikey:%s" "$OP_TOKEN" | base64)"
 
-if curl -fsS \
+if curl -k -fsS \
   --connect-timeout 5 \
   --max-time 10 \
   -H "Authorization: Basic $AUTH_HEADER" \
