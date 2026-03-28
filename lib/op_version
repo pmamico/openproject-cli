@@ -1,0 +1,15 @@
+#!/bin/bash
+
+VERSION="2026_03_28"
+
+if [ "${1:-}" == "--summary" ]; then
+  echo "CLI verzió kiírása"
+  exit 0
+fi
+
+if [ "${1:-}" == "--desc" ]; then
+  echo "Az openproject CLI eszköz aktuális verzióját írja ki."
+  exit 0
+fi
+
+echo "$VERSION"

@@ -16,6 +16,8 @@ Ez az eszközkészlet teljes értékű parancssori felület (CLI) az OpenProject
 | `op log <óra> "megjegyzés"` | Időráfordítás naplózása az aktuális jegyre | `--tegnap`, `--nap=YYYY-MM-DD` |
 | `op report [YYYY-MM-DD]` | Megadott napra eső saját időbejegyzések JSON riportja | Opcionális dátum (YYYY-MM-DD) |
 | `op create "Cím" ["Leírás"]` | Új work package létrehozása az aktuális projektben, hozzád rendelve | `.op_info` szükséges |
+| `op health` | OpenProject kapcsolat ellenőrzése healthcheck célra | Exit code: `0` siker, `1` hiba |
+| `op version` | CLI verzió kiírása | – |
 | `op prio [opciók] <azonosítók...>` | Kiemelt jegyek prioritás növelése, többi jegy „on hold” státuszra tétele | `--team`, `--dry-run` |
 | `op enum_status [név]` | Státusz lista JSON-ként vagy név alapján csak az ID | – |
 | `op queries` | Elérhető query-k teljes JSON-ja | – |
@@ -62,6 +64,15 @@ Az output közvetlenül felhasználható további automatizálásokhoz vagy jele
 
 ### `op create "Cím" ["Leírás"]`
 Új work package-et hoz létre az `op init` során beállított projektben, és automatikusan hozzád rendeli. Lekéri a felhasználói ID-t (`/api/v3/users/me`), szükség esetén Markdown leírást is küld. A sikeres válaszból kompakt JSON-t (`id`, `title`, `status`) ír ki.
+
+### `op health`
+Egyszerű healthcheck parancs, ami csak azt ellenőrzi, hogy az `OP_BASE_URL` és `OP_TOKEN` használatával elérhető-e az OpenProject API (`/api/v3/users/me`).
+
+- siker esetén: `0` exit code
+- hiba esetén (rossz token, hibás URL, nem elérhető szerver): `1` exit code
+
+### `op version`
+Kiírja az eszköz aktuális verzióját egy sorban.
 
 ### `op prio [--team] [--dry-run] <azonosítók vagy minták...>`
 Az `op list` által látható jegyek körében dolgozik. A megadott azonosítók lehetnek számszerű work package ID-k vagy subject-részletek (kis/nagybetűfüggetlen). Ha egy minta több találatot ad, a parancs leáll, hogy elkerülje a véletlen módosításokat. A kiválasztott jegyek prioritását „High”-ra emeli, az összes többi látható jegy státuszát „on hold”-ra állítja. `--team` esetén az assignee szűrés lekerül, `--dry-run` módban csak a tervezett változtatásokat listázza.

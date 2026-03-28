@@ -1,0 +1,37 @@
+#!/bin/bash
+
+if [ "${1:-}" == "--summary" ]; then
+  echo "OpenProject kapcsolat ellenőrzése (healthcheck)"
+  exit 0
+fi
+
+if [ "${1:-}" == "--desc" ]; then
+  echo "Ellenorzi, hogy az OP_BASE_URL es OP_TOKEN beallitasokkal elerheto-e az OpenProject API. Siker eseten 0, hiba eseten nem-0 exit code."
+  exit 0
+fi
+
+if [ -z "${OP_BASE_URL:-}" ]; then
+  echo "Hiba: az OP_BASE_URL nincs beallitva." >&2
+  exit 1
+fi
+
+if [ -z "${OP_TOKEN:-}" ]; then
+  echo "Hiba: az OP_TOKEN nincs beallitva." >&2
+  exit 1
+fi
+
+BASE_URL="${OP_BASE_URL%/}"
+AUTH_HEADER="$(printf "apikey:%s" "$OP_TOKEN" | base64)"
+
+if curl -fsS \
+  --connect-timeout 5 \
+  --max-time 10 \
+  -H "Authorization: Basic $AUTH_HEADER" \
+  -H "Content-Type: application/json" \
+  "$BASE_URL/api/v3/users/me" >/dev/null; then
+  echo "OK: OpenProject kapcsolat rendben."
+  exit 0
+fi
+
+echo "Hiba: OpenProject kapcsolat sikertelen (URL vagy token hibas, vagy a szerver nem elerheto)." >&2
+exit 1
