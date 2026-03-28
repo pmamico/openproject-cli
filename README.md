@@ -22,6 +22,19 @@ Ez az eszközkészlet teljes értékű parancssori felület (CLI) az OpenProject
 | `op enum_status [név]` | Státusz lista JSON-ként vagy név alapján csak az ID | – |
 | `op queries` | Elérhető query-k teljes JSON-ja | – |
 
+## Fish shell completion
+
+Az `op` Fish completion fajlja a repositoryban: `completions/op.fish`.
+
+Rovid telepites:
+
+```bash
+mkdir -p ~/.config/fish/completions
+cp completions/op.fish ~/.config/fish/completions/op.fish
+```
+
+Reszletes leiras: `doc/fish-completion.md`
+
 ## Parancsok részletesen
 
 ### `op init`
