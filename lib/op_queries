@@ -1,0 +1,19 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+
+if [ "$1" == "--summary" ]; then
+  echo "Elérhető queryk"
+  exit 0
+fi
+
+if [ "$1" == "--desc" ]; then
+  echo "..."
+  exit 0
+fi
+
+# Nincs paraméter → teljes name → id JSON
+"$LIB_DIR"/api_get "/api/v3/queries" | \
+  jq

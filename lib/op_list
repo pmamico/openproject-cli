@@ -1,0 +1,80 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+
+if [ "$1" == "--summary" ]; then
+  echo "Hozzám rendelt feladatok (.op_info esetén csak az adott projektből) — kapcsolók: --team (mindenki), --table (táblázatos nézet)"
+  exit 0
+fi
+
+if [ "$1" == "--desc" ]; then
+  echo "Nyitott jegyek listázása. Alap: hozzám rendelt. --team esetén assignee szűrés nélkül. Ha van .op_info, csak az adott projektből. --table esetén táblázatos kimenet."
+  exit 0
+fi
+
+# Kapcsoló: --team → ne csak a hozzám rendelt jegyek
+TEAM_MODE=false
+TABLE_MODE=false
+for arg in "$@"; do
+  case "$arg" in
+    --team) TEAM_MODE=true ;;
+    --table) TABLE_MODE=true ;;
+  esac
+done
+
+# Alap szűrők
+if [ "$TEAM_MODE" = true ]; then
+  # Csapat nézet: csak nyitott státusz, nincs assignee szűrés
+  FILTERS_JSON=$(jq -n '[
+    {"status_id":{"operator":"o","values":[]}}
+  ]')
+else
+  # Alap: hozzám rendelt + nyitott
+  FILTERS_JSON=$(jq -n '[
+    {"assignee":{"operator":"=","values":["me"]}},
+    {"status_id":{"operator":"o","values":[]}}
+  ]')
+fi
+
+# Kontextus: ha van .op_info, szűrés a projektre
+if [ -f ".op_info" ]; then
+  PID=$(jq -r '.project_id // empty' ".op_info")
+  if [ -n "$PID" ]; then
+    FILTERS_JSON=$(jq -cn --argjson f "$FILTERS_JSON" --arg pid "$PID" '$f + [{"project_id":{"operator":"=","values":[$pid]}}]')
+  fi
+fi
+
+ENCODED=$(jq -rn --argjson f "$FILTERS_JSON" '$f | @uri')
+
+
+DATA=$("$LIB_DIR"/api_get "/api/v3/work_packages?filters=$ENCODED")
+
+ITEMS_RAW=$(echo "$DATA" | jq '
+  ._embedded.elements
+  | map({
+      id,
+      project: ._links.project.title,
+      status: ._links.status.title,
+      subject,
+      priority: (._links.priority.title // ""),
+      percentageDone: (.percentageDone // 0)
+    })
+  | sort_by([.project, .id])
+')
+
+if [ "$TABLE_MODE" = true ]; then
+  echo "$ITEMS_RAW" | jq -r '
+    (.[0] | keys_unsorted) as $keys
+    | $keys,
+      (.[] | [.[$keys[]]])
+    | @tsv
+  ' | tabulate -1 -s "$(printf '\t')" --format grid
+else
+  echo "$ITEMS_RAW" | jq '
+    group_by(.project)
+    | map({key: .[0].project, value: (map(del(.project)))})
+    | from_entries
+  '
+fi

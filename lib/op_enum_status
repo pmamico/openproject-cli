@@ -1,0 +1,32 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+STATUS_NAME="$1"
+
+
+if [ "$1" == "--summary" ]; then
+  echo "Elérhető ticket státuszok"
+  exit 0
+fi
+
+if [ "$1" == "--desc" ]; then
+  echo "Státusz lista lekérdezése vagy név alapján id lekérdezése"
+  exit 0
+fi
+
+if [ -n "$STATUS_NAME" ]; then
+  # Ha van megadott státusznév → csak az ID-t adjuk vissza
+  "$LIB_DIR"/api_get "/api/v3/statuses" | \
+    jq -r --arg name "$STATUS_NAME" '
+      ._embedded.elements
+      | map({key: .name, value: .id})
+      | from_entries
+      | .[$name]'
+else
+  # Nincs paraméter → teljes name → id JSON
+  "$LIB_DIR"/api_get "/api/v3/statuses" | \
+    jq '._embedded.elements
+        | map({key: .name, value: .id})
+        | from_entries'
+fi

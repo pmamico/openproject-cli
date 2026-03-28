@@ -1,0 +1,50 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+# Summary / description for dispatcher
+if [ "$1" == "--summary" ]; then
+  echo "Elérhető projektek listája (JSON)"
+  exit 0
+fi
+
+if [ "$1" == "--desc" ]; then
+  echo "Minden (számodra látható) OpenProject projekt JSON listázása: id, identifier, name, active, public"
+  exit 0
+fi
+
+# Optional: override page size via env
+PAGE_SIZE="${PAGE_SIZE:-100}"
+
+tmp_file="$(mktemp)"
+path_q="/api/v3/projects?offset=1&pageSize=${PAGE_SIZE}"
+
+# Gyűjtés minden oldalról, követve a nextByOffset linket
+while : ; do
+  resp="$("$LIB_DIR"/api_get "$path_q")" || resp=""
+  if [ -z "$resp" ]; then
+    break
+  fi
+
+  # Tároljuk az oldal elemeit (kompakt JSON tömbként)
+  echo "$resp" | jq -c '._embedded.elements
+    | map({
+        id,
+        identifier,
+        name,
+        active,
+        public
+      })' >> "$tmp_file"
+
+  next_href="$(echo "$resp" | jq -r '._links.nextByOffset.href // empty')"
+  if [ -z "$next_href" ]; then
+    break
+  fi
+  path_q="$next_href"
+done
+
+# Tömbök összefűzése, ha nem volt input, akkor üres tömb
+jq -s 'add // []' "$tmp_file"
+
+rm -f "$tmp_file"

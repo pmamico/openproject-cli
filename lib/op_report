@@ -1,0 +1,172 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+if [ "$1" == "--summary" ]; then
+  echo "Időráfordítások listázása egy adott napra JSON formátumban"
+  exit 0
+fi
+
+if [ "$1" == "--desc" ]; then
+  echo "Egy adott nap (alapból ma) saját időbejegyzéseit listázza tömör, projektenként csoportosított JSON kimenettel. Opcionálisan megadható egy YYYY-MM-DD dátum."
+  echo "Megjegyzés: A 'hours' mező ISO-8601 duration formátumokat (pl. PT2H, PT30M, PT1H30M) támogat."
+  exit 0
+fi
+
+usage() {
+  echo "Használat: op report [--table] [YYYY-MM-DD]" >&2
+  exit 1
+}
+
+OUTPUT_FORMAT="json"
+TARGET_DATE=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --table)
+      OUTPUT_FORMAT="table"
+      shift
+      ;;
+    --*)
+      usage
+      ;;
+    *)
+      if [ -n "$TARGET_DATE" ]; then
+        usage
+      fi
+      TARGET_DATE="$1"
+      shift
+      ;;
+  esac
+done
+
+if [ -z "$TARGET_DATE" ]; then
+  TARGET_DATE=$(date +%F)
+else
+  if ! [[ "$TARGET_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "Hibás dátum formátum: $TARGET_DATE" >&2
+    usage
+  fi
+fi
+
+# Saját user ID lekérése (kliens oldali szűréshez)
+ME_ID=$("$LIB_DIR"/api_get "/api/v3/users/me" | jq -r '.id')
+
+# Opcionális projekt szűrő a .op_info fájlból
+PID=""
+if [ -f ".op_info" ]; then
+  PID=$(jq -r '.project_id // empty' ".op_info")
+fi
+
+# Kiszámítjuk a filters paramétert (spent_on + user, opcionálisan project), majd URL-enkódoljuk
+# spent_on szűrés: használjuk az OpenProject "=d" (date equals) operátort, pl. filters=[{"spent_on":{"operator":"=d","values":["2026-02-02"]}}]
+FILTERS_JSON=$(jq -nc --arg date "$TARGET_DATE" --arg uid "$ME_ID" --arg pid "$PID" '
+  [
+    { "spent_on": { "operator": "=d", "values": [$date] } },
+    { "user": { "operator": "=", "values": [$uid] } }
+  ]
+  + (if ($pid // "") != "" then [ { "project": { "operator": "=", "values": [$pid] } } ] else [] end)
+')
+FILTERS_ENC=$(printf '%s' "$FILTERS_JSON" | jq -sRr @uri)
+QUERY="/api/v3/time_entries?pageSize=200&filters=$FILTERS_ENC"
+RESPONSE=$("$LIB_DIR"/api_get "$QUERY")
+
+if [ -z "$RESPONSE" ]; then
+  echo "Nem érkezett válasz az API-tól" >&2
+  exit 1
+fi
+
+# API hiba kezelése (pl. ismeretlen filter kulcs)
+if echo "$RESPONSE" | jq -e '._type? == "Error"' >/dev/null 2>&1; then
+  echo "API hiba (time_entries lekérés):" >&2
+  echo "$RESPONSE" | jq >&2
+  exit 1
+fi
+
+FINAL_JSON=$(
+  echo "$RESPONSE" \
+    | jq '._embedded.elements // []' \
+    | jq --arg date "$TARGET_DATE" --argjson meId "$ME_ID" --arg pid "$PID" '
+    # ISO-8601 duration (PTxHyMzS) to decimal hours; invalid -> 0
+    def iso_to_hours:
+      ( . // "" ) as $val
+      | if ($val | test("^PT(?=[0-9.]+[HMS])(?:[0-9]+(?:\\.[0-9]+)?H)?(?:[0-9]+(?:\\.[0-9]+)?M)?(?:[0-9]+(?:\\.[0-9]+)?S)?$"))
+        then (
+          ($val | capture("^PT(?:(?<h>[0-9]+(?:\\.[0-9]+)?)H)?(?:(?<m>[0-9]+(?:\\.[0-9]+)?)M)?(?:(?<s>[0-9]+(?:\\.[0-9]+)?)S)?$") ) as $d
+          | (($d.h // "0") | tonumber)
+            + ((($d.m // "0") | tonumber) / 60)
+            + ((($d.s // "0") | tonumber) / 3600)
+        )
+        else 0
+        end;
+
+    def work_package_id:
+      ( [ ._links.workPackage.href, ._links.entity.href ]
+        | map(select(. != null))
+        | first
+      ) as $href
+      | if $href == null then null else ($href | split("/") | last | tonumber) end;
+
+    def filter_by_project($pid):
+      if ($pid // "") == "" then .
+      else map(select((try (._links.project.href | capture("/projects/(?<id>[0-9]+)$").id) catch null) == $pid))
+      end;
+
+    map(select(.spentOn == $date))
+    | map(select((try (._links.user.href | capture("/users/(?<id>[0-9]+)$").id | tonumber) catch null) == $meId))
+    | filter_by_project($pid)
+    | map({
+        project: (._links.project.title // "Unknown"),
+        hours: (.hours | iso_to_hours),
+        workPackageId: work_package_id,
+        workPackageTitle: (._links.workPackage.title // ._links.entity.title // "")
+      }) as $flat
+    | (reduce $flat[] as $entry (
+          {};
+          .[$entry.project] = (
+            (.[$entry.project] // { entries: [], sumHours: 0 })
+            | .entries += [ { hours: $entry.hours, workPackageId: $entry.workPackageId, workPackageTitle: $entry.workPackageTitle } ]
+            | .sumHours += ($entry.hours // 0)
+          )
+        )) as $projects
+    | {
+        projects: $projects,
+        sumHours: (($flat | map(.hours) | add) // 0)
+      }
+    '
+)
+
+if [ "$OUTPUT_FORMAT" = "table" ]; then
+  printf "%s" "$FINAL_JSON" \
+    | jq -r '
+        def rows:
+          .projects
+          | to_entries
+          | map(.key as $project | (.value.entries // [])
+              | map({
+                  project: $project,
+                  workPackageId,
+                  workPackageTitle,
+                  hours
+                })
+            )
+          | add // [];
+
+        (["Project","WorkPackageId","WorkPackageTitle","Hours"] | @tsv),
+        (rows[]
+          | [
+              .project,
+              (if .workPackageId == null then "-" else (.workPackageId | tostring) end),
+              (.workPackageTitle // ""),
+              (.hours // 0)
+            ]
+          | @tsv)
+      ' \
+    | column -t -s $'\t'
+
+  echo
+  printf "Összes óra: %s\n" "$(printf "%s" "$FINAL_JSON" | jq '.sumHours')"
+else
+  printf "%s\n" "$FINAL_JSON"
+fi

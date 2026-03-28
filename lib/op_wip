@@ -1,0 +1,53 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+if [ "$1" == "--summary" ]; then
+  echo "Jegy megnyitása (in progress)"
+  exit 0
+fi
+
+if [ "$1" == "--desc" ]; then
+  echo "Az aktuális (vagy megadott) jegy státuszát 'in progress'-re állítja."
+  exit 0
+fi
+
+# Jegy ID meghatározása
+if [ -n "$1" ]; then
+  TICKET_ID="$1"
+else
+  if ! command -v "$LIB_DIR"/get_ticket_id >/dev/null 2>&1; then
+    echo "Hiányzik a get_ticket_id parancs" >&2
+    exit 1
+  fi
+  TICKET_ID=$("$LIB_DIR"/get_ticket_id)
+  if [ -z "$TICKET_ID" ]; then
+    echo "Nem sikerült meghatározni a jegy ID-t" >&2
+    exit 1
+  fi
+fi
+
+LOCK_VERSION=$("$LIB_DIR"/api_get "/api/v3/work_packages/$TICKET_ID" | jq -r '.lockVersion')
+
+if [ -z "$LOCK_VERSION" ] || [ "$LOCK_VERSION" == "null" ]; then
+  echo "Nem sikerült lekérni a lockVersion értéket a jegyhez (#$TICKET_ID)" >&2
+  exit 1
+fi
+
+read -r -d '' PAYLOAD <<EOF
+{
+  "lockVersion": $LOCK_VERSION,
+  "_links": {
+    "status": {
+      "href": "/api/v3/statuses/6",
+      "title": "in progress"
+    }
+  }
+}
+EOF
+
+# PATCH hívás a jegy lezárására (silent mód)
+"$LIB_DIR"/api_patch "/api/v3/work_packages/$TICKET_ID" "$PAYLOAD" >/dev/null
+
+echo "#$TICKET_ID in progress."

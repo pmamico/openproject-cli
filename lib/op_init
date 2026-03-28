@@ -1,0 +1,99 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+print_usage() {
+  echo "Használat:"
+  echo "  op init <keresőszó vagy identifier>"
+  echo
+  echo "Leírás:"
+  echo "  Az aktuális mappát összekapcsolja egy OpenProject projekttel."
+  echo "  Egyedi találat esetén létrehoz egy .op_info fájlt a mappában,"
+  echo "  amely tartalmazza a projekt azonosítóját és metaadatait."
+  echo
+  echo "Egyezés logika:"
+  echo "  - identifier: pontos egyezés (kis/nagybetű érzéketlen)"
+  echo "  - name: részstring egyezés (kis/nagybetű érzéketlen)"
+}
+
+# Summary / description for dispatcher
+if [ "${1:-}" == "--summary" ]; then
+  echo "Mappa összekapcsolása egy OpenProject projekttel (.op_info)"
+  exit 0
+fi
+
+if [ "${1:-}" == "--desc" ]; then
+  echo "op init <keresőszó|identifier>: Egyedi találat esetén .op_info létrehozása a projekttel. Több találat esetén listáz, nem állít be semmit."
+  exit 0
+fi
+
+if [ "${1:-}" = "help" ] || [ "${1:-}" = "--help" ] || [ $# -lt 1 ]; then
+  print_usage
+  exit 1
+fi
+
+QUERY="$*"
+
+# Lekérdezzük a projekt listát (JSON tömb: id, identifier, name, active, public)
+if ! PROJECTS_JSON="$("$LIB_DIR"/op_project_list)"; then
+  echo "Hiba: Nem sikerült lekérdezni a projektek listáját." >&2
+  exit 1
+fi
+
+# Szűrés:
+# - identifier: pontos egyezés (case-insensitive)
+# - name: részstring (case-insensitive)
+CANDIDATES_JSON="$(
+  echo "$PROJECTS_JSON" | jq --arg q "$QUERY" -c '
+    [ .[] 
+      | select(
+          ((.identifier // "" | ascii_downcase) == ($q | ascii_downcase))
+          or
+          ((.name // "" | ascii_downcase) | contains($q | ascii_downcase))
+        )
+    ]
+    | unique_by(.id)
+    | map({ id, identifier, name })
+  '
+)"
+
+COUNT="$(echo "$CANDIDATES_JSON" | jq 'length')"
+
+if [ "$COUNT" -eq 0 ]; then
+  echo "Nincs találat a(z) \"$QUERY\" kifejezésre." >&2
+  exit 1
+fi
+
+if [ "$COUNT" -gt 1 ]; then
+  echo "Több projekt is illeszkedik (nem állítottam be semmit). Válassz pontosabban, pl. az identifier megadásával:" >&2
+  echo
+  # Szép listázás
+  printf "%-8s  %-30s  %s\n" "ID" "IDENTIFIER" "NAME"
+  printf "%-8s  %-30s  %s\n" "--------" "------------------------------" "------------------------------"
+  echo "$CANDIDATES_JSON" | jq -r '.[] | "\(.id)\t\(.identifier)\t\(.name)"' | awk -F'\t' '{ printf "%-8s  %-30s  %s\n", $1, $2, $3 }'
+  exit 2
+fi
+
+# Egyedi találat
+PROJECT_OBJ="$(echo "$CANDIDATES_JSON" | jq '.[0]')"
+PROJECT_ID="$(echo "$PROJECT_OBJ" | jq -r '.id')"
+PROJECT_IDENTIFIER="$(echo "$PROJECT_OBJ" | jq -r '.identifier')"
+PROJECT_NAME="$(echo "$PROJECT_OBJ" | jq -r '.name')"
+
+OP_INFO_PATH=".op_info"
+TMP_FILE="$(mktemp)"
+
+# Írjunk JSON-t a .op_info-ba
+echo "$PROJECT_OBJ" | jq -c --arg ident "$PROJECT_IDENTIFIER" --arg name "$PROJECT_NAME" '
+  {
+    project_id: .id,
+    project_identifier: $ident,
+    project_name: $name
+  }
+' > "$TMP_FILE"
+
+mv "$TMP_FILE" "$OP_INFO_PATH"
+
+echo "Beállítva: id=$PROJECT_ID identifier=$PROJECT_IDENTIFIER name=$PROJECT_NAME → $OP_INFO_PATH"

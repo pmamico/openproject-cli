@@ -1,0 +1,109 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+if [ "$1" == "--summary" ]; then
+  echo "Időráfordítás naplózása megadott work package-hez (óra + megjegyzés)"
+  exit 0
+fi
+
+if [ "$1" == "--desc" ]; then
+  echo "A megadott work package-hez időt naplóz megadott óraszámmal és opcionális kommenttel."
+  exit 0
+fi
+
+# --- extra kapcsolók feldolgozása ---
+SPENT_ON=""
+EXTRA_ARGS=()
+
+for arg in "$@"; do
+  case "$arg" in
+    --tegnap)
+      if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS (BSD date)
+        SPENT_ON=$(date -v-1d +%F)
+      else
+        # Linux (GNU date)
+        SPENT_ON=$(date -d "yesterday" +%F)
+      fi
+      ;;
+    --nap=*)
+      SPENT_ON="${arg#--nap=}"
+      ;;
+    *)
+      EXTRA_ARGS+=("$arg")
+      ;;
+  esac
+done
+
+# --- paraméterek (workpackage + óra + opcionális komment) ---
+if [ ${#EXTRA_ARGS[@]} -lt 2 ]; then
+  echo "Használat: op log <workpackage> <óraszám> [\"komment szöveg\"] [--tegnap|--nap=YYYY-MM-DD]" >&2
+  exit 1
+fi
+
+WORKPACKAGE_ID="${EXTRA_ARGS[0]}"
+HOURS="${EXTRA_ARGS[1]}"
+COMMENT="${EXTRA_ARGS[2]:-}"
+
+# --- work package id ellenőrzés ---
+if [ -z "$WORKPACKAGE_ID" ]; then
+  echo "Hiányzik a work package azonosító" >&2
+  exit 1
+fi
+
+# --- work package adatainak lekérése (project linkhez) ---
+DATA=$("$LIB_DIR"/api_get "/api/v3/work_packages/$WORKPACKAGE_ID")
+PROJECT_LINK=$(echo "$DATA" | jq -r '._links.project.href')
+
+if [ -z "$PROJECT_LINK" ] || [ "$PROJECT_LINK" == "null" ]; then
+  echo "Nem sikerült lekérni a projekt linket a jegyhez." >&2
+  exit 1
+fi
+
+# --- időformátum konvertálás (3.5 → PT3H30M) ---
+function float_to_iso8601() {
+  local float="$1"
+  local hour=$(echo "$float" | cut -d. -f1)
+  local min_fraction=$(echo "$float" | cut -s -d. -f2)
+
+  if [ -z "$min_fraction" ]; then
+    echo "PT${hour}H"
+  else
+    local min=$(echo "scale=2; 0.$min_fraction * 60" | bc | awk '{printf "%d", ($1 + 0.5)}')
+    echo "PT${hour}H${min}M"
+  fi
+}
+
+ISO_HOURS=$(float_to_iso8601 "$HOURS")
+
+# --- ha nincs megadva nap, legyen ma ---
+if [ -z "$SPENT_ON" ]; then
+  SPENT_ON=$(date +%F)
+fi
+
+# --- időlog JSON payload ---
+read -r -d '' PAYLOAD <<EOF
+{
+  "comment": "$COMMENT",
+  "spentOn": "$SPENT_ON",
+  "hours": "$ISO_HOURS",
+  "_links": {
+    "workPackage": {
+      "href": "/api/v3/work_packages/$WORKPACKAGE_ID"
+    },
+    "project": {
+      "href": "$PROJECT_LINK"
+    },
+    "activity": {
+      "href": "/api/v3/time_entries/activities/9"
+    }
+  }
+}
+EOF
+
+# --- hívás ---
+"$LIB_DIR"/api_post "/api/v3/time_entries" "$PAYLOAD" >/dev/null
+
+echo "✅ $HOURS óra rögzítve (#$WORKPACKAGE_ID) – \"$COMMENT\" ($SPENT_ON)"

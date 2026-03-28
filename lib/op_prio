@@ -1,0 +1,255 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+# ----------------------------------------
+# Metadata for `op help`
+# ----------------------------------------
+if [ "$1" == "--summary" ]; then
+  echo "Rangsorolás: a megadott jegyeket HIGH prioritásra emeli, minden más nyitott jegyet 'on hold' státuszra állít a látható körben (.op_info + hozzám rendelt)."
+  exit 0
+fi
+
+if [ "$1" == "--desc" ]; then
+  cat <<'DESC'
+Használat:
+  op prio [<kapcsolók>] <azonosítók...>
+
+Azonosítók:
+  - Szám: jegy ID (pl. 12345)
+  - Szöveg: subject részlet (kis/nagybetű nem számít, részegyezés). Ha egy mintára több találat van, a parancs figyelmeztet és NEM módosít semmit.
+
+Működés:
+  - A kiválasztott jegyek prioritását HIGH-ra állítja.
+  - A többi nyitott jegy státuszát 'on hold'-ra állítja (prioritásuk változatlan marad).
+  - A művelet a `op list` alapértelmezett láthatóságát használja:
+      * hozzám rendelt, nyitott jegyek
+      * ha van .op_info, akkor csak az adott projekt
+Kapcsolók:
+  --team     : a csapat összes nyitott jegyére terjessze ki (assignee szűrés nélkül)
+  --dry-run  : csak mutassa, mit tenne, módosítás nélkül
+
+Példák:
+  op prio "projekt minimum" "oktatás"
+  op prio 12345 55342
+  op prio --team "backend" 11223 --dry-run
+DESC
+  exit 0
+fi
+
+# ----------------------------------------
+# Arg/parsing
+# ----------------------------------------
+TEAM_MODE=false
+DRY_RUN=false
+ARGS=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --team) TEAM_MODE=true; shift ;;
+    --dry-run|--dry) DRY_RUN=true; shift ;;
+    --) shift; while [ $# -gt 0 ]; do ARGS+=("$1"); shift; done; break ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+if [ ${#ARGS[@]} -eq 0 ]; then
+  echo "Hiba: legalább egy jegy azonosítót (ID vagy subject-részlet) meg kell adni." >&2
+  echo "Futtasd: op prio --desc" >&2
+  exit 1
+fi
+
+# ----------------------------------------
+# Keresési scope összeállítás (mint op_list)
+# ----------------------------------------
+if [ "$TEAM_MODE" = true ]; then
+  FILTERS_JSON=$(jq -n '[
+    {"status_id":{"operator":"o","values":[]}}
+  ]')
+else
+  FILTERS_JSON=$(jq -n '[
+    {"assignee":{"operator":"=","values":["me"]}},
+    {"status_id":{"operator":"o","values":[]}}
+  ]')
+fi
+
+if [ -f ".op_info" ]; then
+  PID=$(jq -r '.project_id // empty' ".op_info")
+  if [ -n "$PID" ]; then
+    FILTERS_JSON=$(jq -cn --argjson f "$FILTERS_JSON" --arg pid "$PID" '$f + [{"project_id":{"operator":"=","values":[$pid]}}]')
+  fi
+fi
+
+ENCODED=$(jq -rn --argjson f "$FILTERS_JSON" '$f | @uri')
+
+DATA=$("$LIB_DIR"/api_get "/api/v3/work_packages?filters=$ENCODED")
+
+ITEMS=$(echo "$DATA" | jq '
+  ._embedded.elements
+  | map({
+      id,
+      project: ._links.project.title,
+      status:  ._links.status.title,
+      subject,
+      priority: (._links.priority.title // "")
+    })
+')
+
+# Ha nincs semmi a scope-ban
+COUNT=$(echo "$ITEMS" | jq 'length')
+if [ "$COUNT" -eq 0 ]; then
+  echo "Nem található jegy a látható körben (szűrők szerint)." >&2
+  exit 1
+fi
+
+# ----------------------------------------
+# Kiválasztás az argumentumok alapján
+# - Szám: ID
+# - Szöveg: subject rész-egyezés (CI)
+# Több találat esetén az egész művelet megszakad.
+# ----------------------------------------
+SELECTED_IDS=()
+
+is_numeric() {
+  [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+# Gyűjtsünk előre egy gyors elérési indexet id->1 (tagság)
+ALL_IDS_SET=" $(echo "$ITEMS" | jq -r '.[].id' | xargs) "
+
+for token in "${ARGS[@]}"; do
+  if is_numeric "$token"; then
+    # ID ellenőrzése, hogy benne van-e a scope-ban
+    if [[ " $ALL_IDS_SET " != *" $token "* ]]; then
+      echo "Hiba: #$token ID nincs a látható körben (szűrők szerint). Megszakítom." >&2
+      exit 1
+    fi
+    SELECTED_IDS+=("$token")
+  else
+    # Subject rész-egyezés (CI)
+    lower=$(printf "%s" "$token" | tr '[:upper:]' '[:lower:]')
+    MATCHES=$(echo "$ITEMS" | jq --arg pat "$lower" '
+      [ .[] | select( (.subject // "" | ascii_downcase | contains($pat)) ) ]')
+    MCOUNT=$(echo "$MATCHES" | jq 'length')
+    if [ "$MCOUNT" -eq 0 ]; then
+      echo "Hiba: nincs találat a(z) \"$token\" mintára. Megszakítom." >&2
+      exit 1
+    elif [ "$MCOUNT" -gt 1 ]; then
+      echo "Figyelmeztetés: a(z) \"$token\" mintára több találat van. Nem történik módosítás." >&2
+      echo "$MATCHES" | jq -r '.[] | "#\(.id)\t[\(.project)] \(.subject)"'
+      exit 2
+    else
+      MID=$(echo "$MATCHES" | jq -r '.[0].id')
+      SELECTED_IDS+=("$MID")
+    fi
+  fi
+done
+
+# Deduplikálás
+SELECTED_IDS_JSON=$(printf '%s\n' "${SELECTED_IDS[@]}" | jq -s 'map(tonumber) | unique')
+SELECTED_IDS_SET=" $(echo "$SELECTED_IDS_JSON" | jq -r '.[]' | xargs) "
+
+# ----------------------------------------
+# Segéd: azonosítók lekérdezése ('on hold' státusz, 'High' prioritás)
+# ----------------------------------------
+STATUS_ON_HOLD_ID=$("$LIB_DIR"/op_enum_status "on hold")
+if [ -z "$STATUS_ON_HOLD_ID" ] || [ "$STATUS_ON_HOLD_ID" = "null" ]; then
+  STATUS_ON_HOLD_ID=$("$LIB_DIR"/api_get "/api/v3/statuses" | jq -r '._embedded.elements[] | select(.name | ascii_downcase == "on hold") | .id' )
+fi
+if [ -z "$STATUS_ON_HOLD_ID" ] || [ "$STATUS_ON_HOLD_ID" = "null" ]; then
+  echo "Hiba: nem található 'on hold' státusz az OpenProjectben." >&2
+  exit 1
+fi
+
+PRIORITY_HIGH_ID=$("$LIB_DIR"/api_get "/api/v3/priorities" | jq -r '._embedded.elements[] | select(.name | ascii_downcase == "high") | .id')
+if [ -z "$PRIORITY_HIGH_ID" ] || [ "$PRIORITY_HIGH_ID" = "null" ]; then
+  echo "Hiba: nem található 'High' prioritás az OpenProjectben." >&2
+  exit 1
+fi
+
+# ----------------------------------------
+# Változtatások előkészítése/alkalmazása
+# - Kiválasztottak: priority = High
+# - Többiek: status = on hold
+# ----------------------------------------
+apply_change_priority_high() {
+  local id="$1"
+  local lockVersion
+  lockVersion=$("$LIB_DIR"/api_get "/api/v3/work_packages/$id" | jq -r '.lockVersion')
+  if [ -z "$lockVersion" ] || [ "$lockVersion" = "null" ]; then
+    echo "Hiba: nem sikerült lockVersion-t olvasni a jegyhez (#$id)" >&2
+    return 1
+  fi
+  read -r -d '' PAYLOAD <<EOF
+{
+  "lockVersion": $lockVersion,
+  "_links": {
+    "priority": {
+      "href": "/api/v3/priorities/$PRIORITY_HIGH_ID",
+      "title": "High"
+    }
+  }
+}
+EOF
+  if [ "$DRY_RUN" = true ]; then
+    echo "#$id - PRIORITY => High (dry-run)"
+  else
+    "$LIB_DIR"/api_patch "/api/v3/work_packages/$id" "$PAYLOAD" >/dev/null
+    echo "#$id - PRIORITY => High"
+  fi
+}
+
+apply_change_status_on_hold() {
+  local id="$1"
+  local lockVersion
+  lockVersion=$("$LIB_DIR"/api_get "/api/v3/work_packages/$id" | jq -r '.lockVersion')
+  if [ -z "$lockVersion" ] || [ "$lockVersion" = "null" ]; then
+    echo "Hiba: nem sikerült lockVersion-t olvasni a jegyhez (#$id)" >&2
+    return 1
+  fi
+  read -r -d '' PAYLOAD <<EOF
+{
+  "lockVersion": $lockVersion,
+  "_links": {
+    "status": {
+      "href": "/api/v3/statuses/$STATUS_ON_HOLD_ID",
+      "title": "on hold"
+    }
+  }
+}
+EOF
+  if [ "$DRY_RUN" = true ]; then
+    echo "#$id - STATUS => on hold (dry-run)"
+  else
+    "$LIB_DIR"/api_patch "/api/v3/work_packages/$id" "$PAYLOAD" >/dev/null
+    echo "#$id - STATUS => on hold"
+  fi
+}
+
+# Felhasználóbarát fejléc
+if [ "$DRY_RUN" = true ]; then
+  echo "Dry-run: a következő változtatásokat hajtaná végre:"
+fi
+
+# Végigmegyünk az összes scope-ban lévő jegyen, és döntünk
+# A selected lista kap HIGH priority-t, a többiek on hold státuszt.
+# Kiírásnál megmutatjuk a subjectet is tájékoztatásképp.
+while IFS= read -r encoded; do
+  # decode egy elem
+  _jq() { echo "$encoded" | base64 --decode | jq -r "$1"; }
+  id=$(_jq '.id')
+  subject=$(_jq '.subject')
+  project=$(_jq '.project')
+
+  if [[ " $SELECTED_IDS_SET " == *" $id "* ]]; then
+    apply_change_priority_high "$id" || exit 1
+  else
+    apply_change_status_on_hold "$id" || exit 1
+  fi
+done < <(echo "$ITEMS" | jq -r '.[] | @base64')
+
+# Összegzés
+if [ "$DRY_RUN" = true ]; then
+  echo "Dry-run vége: nem történt módosítás."
+fi

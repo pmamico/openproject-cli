@@ -1,0 +1,91 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+# Dispatcher metadata
+if [ "${1:-}" == "--summary" ]; then
+  echo "Új work package létrehozása hozzám rendelve"
+  exit 0
+fi
+
+if [ "${1:-}" == "--desc" ]; then
+  echo "Használat: op create \"Cím\" \"Leírás (opcionális)\" — A projektet előtte op init-tel állítsd be (.op_info)."
+  exit 0
+fi
+
+# Args
+if [ $# -lt 1 ]; then
+  echo "Használat: op create \"Cím\" \"Leírás (opcionális)\"" >&2
+  exit 1
+fi
+
+SUBJECT="$1"
+DESC="${2:-}"
+
+# Project context (.op_info required)
+OP_INFO_PATH=".op_info"
+if [ ! -f "$OP_INFO_PATH" ]; then
+  echo "Hiányzik a projekt beállítás (.op_info). Előbb op init-elni kell a projektet." >&2
+  exit 1
+fi
+
+PROJECT_ID="$(jq -r '.project_id // empty' "$OP_INFO_PATH" 2>/dev/null || true)"
+if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
+  echo "Hibás .op_info (project_id hiányzik). Futtasd újra: op init" >&2
+  exit 1
+fi
+
+# Resolve current user (assignee)
+ME_JSON="$("$LIB_DIR"/api_get "/api/v3/users/me" 2>/dev/null || true)"
+ME_ID="$(echo "$ME_JSON" | jq -r '.id // empty')"
+if [ -z "$ME_ID" ] || [ "$ME_ID" = "null" ]; then
+  echo "Nem sikerült azonosítani a felhasználót (/api/v3/users/me)." >&2
+  exit 1
+fi
+
+# Build payload (description is optional)
+if [ -n "$DESC" ]; then
+  PAYLOAD="$(jq -n \
+    --arg subject "$SUBJECT" \
+    --arg desc "$DESC" \
+    --arg assignee "/api/v3/users/$ME_ID" \
+    '{
+      subject: $subject,
+      description: { format: "markdown", raw: $desc },
+      _links: {
+        assignee: { href: $assignee }
+      }
+    }')"
+else
+  PAYLOAD="$(jq -n \
+    --arg subject "$SUBJECT" \
+    --arg assignee "/api/v3/users/$ME_ID" \
+    '{
+      subject: $subject,
+      _links: {
+        assignee: { href: $assignee }
+      }
+    }')"
+fi
+
+# Create work package in project
+RESP="$("$LIB_DIR"/api_post "/api/v3/projects/$PROJECT_ID/work_packages" "$PAYLOAD" 2>/dev/null || true)"
+
+# Basic error handling: if response lacks an id, print server message
+ID="$(echo "$RESP" | jq -r '.id // empty' 2>/dev/null || true)"
+if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+  # Try to surface a meaningful message if available
+  MSG="$(echo "$RESP" | jq -r '.message // empty' 2>/dev/null || true)"
+  if [ -n "$MSG" ]; then
+    echo "Hiba a létrehozás közben: $MSG" >&2
+  else
+    echo "Hiba a létrehozás közben. Szerver válasz:" >&2
+    echo "$RESP" >&2
+  fi
+  exit 1
+fi
+
+# Output required compact JSON
+echo "$RESP" | jq -c '{ id: .id, title: .subject, status: ._links.status.title }'

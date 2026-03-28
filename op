@@ -1,0 +1,49 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR/lib"
+OP_PREFIX="op_"
+
+if [ "$1" == "--summary" ]; then
+  exit 1
+fi
+
+if [ "$1" == "--desc" ]; then
+  exit 1
+fi
+
+# Elérhető operation-ök lekérdezése
+function list_operations() {
+  for script in "$LIB_DIR"/${OP_PREFIX}*; do
+    if [ -x "$script" ]; then
+      op_name="$(basename "$script" | sed "s/^${OP_PREFIX}//")"
+      summary="$("$script" --summary 2>/dev/null)"
+      printf "%-15s %s\n" "$op_name" "$summary"
+    fi
+  done
+}
+
+# Argumentumok feldolgozása
+if [ "$1" == "help" ] || [ -z "$1" ]; then
+  echo "Elérhető OpenProject műveletek:"
+  list_operations
+  exit 0
+fi
+
+OP_NAME="$1"
+shift
+OP_SCRIPT="${LIB_DIR}/${OP_PREFIX}${OP_NAME}"
+
+# Ha nincs ilyen operation script
+if [ ! -x "$OP_SCRIPT" ]; then
+  echo "Ismeretlen művelet: $OP_NAME"
+  echo "Futtasd: op help"
+  exit 1
+fi
+
+# Ha pl. `op info help` → `op_info --help`
+if [ "$1" == "help" ]; then
+  "$OP_SCRIPT" --desc
+else
+  "$OP_SCRIPT" "$@"
+fi
