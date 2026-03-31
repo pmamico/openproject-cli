@@ -15,6 +15,7 @@ Ez az eszközkészlet teljes értékű parancssori felület (CLI) az OpenProject
 | `op close [id]` | Jegy lezárása („closed”) | – |
 | `op log <óra> "megjegyzés"` | Időráfordítás naplózása az aktuális jegyre | `--tegnap`, `--nap=YYYY-MM-DD` |
 | `op report [YYYY-MM-DD]` | Megadott napra eső saját időbejegyzések JSON riportja | Opcionális dátum (YYYY-MM-DD) |
+| `op calendar [YYYY.MM|MM|honap|-N]` | ASCII havi naptár heti bontásban, napi összesített munkaórákkal | pl. `-1`, `02`, `jan`, `2024.11` |
 | `op create "Cím" ["Leírás"]` | Új work package létrehozása az aktuális projektben, hozzád rendelve | `.op_info` szükséges |
 | `op health` | OpenProject kapcsolat ellenőrzése healthcheck célra | Exit code: `0` siker, `1` hiba |
 | `op version` | CLI verzió kiírása | – |
@@ -74,6 +75,27 @@ Időjelentést készít a saját bejegyzéseidről egy adott napra. Paraméter n
 - `entries[]`: részletes elemek `id`, `spentOn`, `hoursISO`, `hoursDecimal`, `comment`, valamint a kapcsolódó projekt/work package/activity/user metaadataival
 
 Az output közvetlenül felhasználható további automatizálásokhoz vagy jelentésekhez.
+
+### `op calendar [YYYY.MM|MM|honap|-N]`
+ASCII havi naptár nézetet ad hétfői hétkezdettel. A nézet minden héthez külön sorban mutatja a hét tartományát (`MM.DD-MM.DD`), és a munkanapok celláiban a napi összesített logolt órát (`xh`) színezve:
+
+- zöld: `>= 8h`
+- sárga: `0 < h < 8`
+- piros: `0h`
+
+Viselkedés:
+
+- hétvégék cellái üresek
+- jövőbeli dátumok cellái mindig üresek
+- mai nap cellája kiemelt (vastagabb szín + `>` prefix)
+- ha van `.op_info`, akkor projektre is szűr, különben az összes saját időbejegyzést veszi figyelembe
+
+Hónapválasztás:
+
+- argumentum nélkül: aktuális hónap
+- `MM` vagy hónapnév (`jan`, `feb`, ...): a legközelebbi múltbeli ilyen hónap
+- `YYYY.MM`: konkrét hónap
+- `-N`: ennyi hónappal korábbi időszak (pl. `-1`, `-4`)
 
 ### `op create "Cím" ["Leírás"]`
 Új work package-et hoz létre az `op init` során beállított projektben, és automatikusan hozzád rendeli. Lekéri a felhasználói ID-t (`/api/v3/users/me`), szükség esetén Markdown leírást is küld. A sikeres válaszból kompakt JSON-t (`id`, `title`, `status`) ír ki.
