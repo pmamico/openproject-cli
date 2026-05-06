@@ -1,119 +1,257 @@
-# OpenProject CLI Eszköz
+# OpenProject CLI Toolkit
 
-Ez az eszközkészlet teljes értékű parancssori felület (CLI) az OpenProjecthez. A készlet segít a mindennapi jegykezelésben, státuszváltásban, időnaplózásban, új feladatok létrehozásában, valamint projekt- és státusz-listák kezelésében közvetlenül a terminálból.
+A practical command-line toolkit for managing OpenProject work packages directly from your terminal. It helps with daily ticket handling, status updates, time tracking, project discovery, lightweight reporting, and team prioritization without leaving your shell.
 
-## Gyors parancsreferencia
+## Highlights
 
-| Parancs | Leírás | Fontos kapcsolók |
+- Link a local repository or folder to an OpenProject project with `op init`
+- List your open work packages, grouped by project, as JSON or a readable table
+- Inspect, update, close, and prioritize work packages from the command line
+- Log time entries for today, yesterday, or any explicit date
+- Generate daily JSON reports and monthly time-tracking calendars
+- Create new work packages assigned to yourself
+- Use Fish shell completion for faster command entry
+
+## Requirements
+
+- Bash
+- `curl`, `jq`, `bc`, `base64`, and standard Unix utilities
+- OpenProject API access token
+- Optional: `tabulate` for `op list --table`
+- Optional: `column` for `op report --table`
+- Optional: Fish shell for completion support
+
+## Configuration
+
+Set the following environment variables before using the CLI:
+
+```bash
+export OP_BASE_URL="https://openproject.example.com"
+export OP_TOKEN="your-openproject-api-token"
+```
+
+You can verify the connection with:
+
+```bash
+op health
+```
+
+For project-aware commands, initialize the current directory once:
+
+```bash
+op init my-project
+```
+
+This creates a local `.op_info` file containing the selected OpenProject project metadata.
+
+## Quick Reference
+
+| Command | Description | Useful Options |
 | --- | --- | --- |
-| `op init <kifejezés>` | Aktuális mappát összekapcsolja egy OpenProject projekttel (.op_info) | – |
-| `op project_list` | Összes látható projekt listázása (id, identifier, name, active, public) | `PAGE_SIZE` környezeti változó |
-| `op list` | Nyitott jegyek listája (alapból hozzám rendelve, projektenként csoportosítva) | `--team`, `--table` |
-| `op review` | Interaktív jegyfelülvizsgálat státusz/prioritás/készültség módosítással | Minden `op list` kapcsoló, kivéve `--table` |
-| `op status [id]` | Jegy részletes adatai git branch alapján vagy explicit azonosítóval | – |
-| `op wip [id]` | Jegy státusza „in progress” | – |
-| `op close [id]` | Jegy lezárása („closed”) | – |
-| `op log <óra> "megjegyzés"` | Időráfordítás naplózása az aktuális jegyre | `--tegnap`, `--nap=YYYY-MM-DD` |
-| `op report [YYYY-MM-DD]` | Megadott napra eső saját időbejegyzések JSON riportja | Opcionális dátum (YYYY-MM-DD) |
-| `op calendar [YYYY.MM|MM|honap|-N]` | ASCII havi naptár heti bontásban, napi összesített munkaórákkal | pl. `-1`, `02`, `jan`, `2024.11` |
-| `op create "Cím" ["Leírás"]` | Új work package létrehozása az aktuális projektben, hozzád rendelve | `.op_info` szükséges |
-| `op health` | OpenProject kapcsolat ellenőrzése healthcheck célra | Exit code: `0` siker, `1` hiba |
-| `op version` | CLI verzió kiírása | – |
-| `op prio [opciók] <azonosítók...>` | Kiemelt jegyek prioritás növelése, többi jegy „on hold” státuszra tétele | `--team`, `--dry-run` |
-| `op enum_status [név]` | Státusz lista JSON-ként vagy név alapján csak az ID | – |
-| `op queries` | Elérhető query-k teljes JSON-ja | – |
+| `op help` | List available operations discovered from `lib/op_*` scripts | - |
+| `op init <query>` | Link the current directory to an OpenProject project via `.op_info` | - |
+| `op project_list` | List all visible projects with `id`, `identifier`, `name`, `active`, and `public` | `PAGE_SIZE` environment variable |
+| `op list` | List open work packages assigned to you, grouped by project | `--team`, `--table` |
+| `op review` | Interactively review tickets and update status, priority, or completion | Same as `op list`, except `--table` |
+| `op status [id]` | Show detailed work package metadata by explicit ID or current Git branch | - |
+| `op wip [id]` | Set a work package status to `in progress` | - |
+| `op close [id]` | Set a work package status to `closed` | - |
+| `op log <id> <hours> ["comment"]` | Log time on a specific work package | `--tegnap`, `--nap=YYYY-MM-DD` |
+| `op report [YYYY-MM-DD]` | Print your time entries for a day as grouped JSON | `--table`, optional date |
+| `op calendar [--json] [month]` | Show a monthly worklog calendar as ASCII or JSON | `--json`, `-1`, `02`, `jan`, `2024.11` |
+| `op create "Title" ["Description"]` | Create a new work package assigned to you | `--projectId=<id>` |
+| `op health` | Check OpenProject API connectivity | Exit code `0` on success, `1` on failure |
+| `op version` | Print the CLI version | - |
+| `op prio [options] <ids...>` | Raise selected tickets to high priority and put others on hold | `--team`, `--dry-run` |
+| `op enum_status [name]` | Print status IDs as JSON, or only the ID for a given status name | - |
+| `op queries` | Print the full OpenProject queries API response | - |
 
-## Fish shell completion
+## Fish Shell Completion
 
-Az `op` Fish completion fajlja a repositoryban: `completions/op.fish`.
+The Fish completion file is included at `completions/op.fish`.
 
-Rovid telepites:
+Install it with:
 
 ```bash
 mkdir -p ~/.config/fish/completions
 cp completions/op.fish ~/.config/fish/completions/op.fish
 ```
 
-Reszletes leiras: `doc/fish-completion.md`
+See `doc/fish-completion.md` for details.
 
-## Parancsok részletesen
+## Command Details
 
-### `op init`
-Az aktuális mappához rendel egy OpenProject projektet. A `op project_list` által látott projektek között keres identifier alapján (pontos egyezés kis/nagybetű függetlenül) vagy névrészlet alapján. Egyedi találatkor `.op_info` fájl készül `project_id`, `project_identifier`, `project_name` mezőkkel. Több találatnál listáz, de nem módosít semmit.
+### `op help`
+
+Lists every executable `lib/op_*` script as an available operation. Each command can also be inspected with `op <command> help`, which forwards to that command's built-in description.
+
+### `op init <query>`
+
+Links the current directory to an OpenProject project. The command searches projects visible through `op project_list` by exact identifier match, case-insensitively, or by partial project name.
+
+When exactly one project matches, it writes a `.op_info` file with:
+
+- `project_id`
+- `project_identifier`
+- `project_name`
+
+If multiple projects match, the command lists the candidates and leaves the directory unchanged.
 
 ### `op project_list`
-Lapozva letölti az összes olyan projektet, amihez van jogosultság. Kimenete JSON tömb: `id`, `identifier`, `name`, `active`, `public`. A `PAGE_SIZE` környezeti változóval felülírható az oldal mérete (alap 100).
+
+Fetches every project visible to the configured user, following OpenProject API pagination. The output is a JSON array containing `id`, `identifier`, `name`, `active`, and `public` fields.
+
+Use the `PAGE_SIZE` environment variable to override the default page size of `100`.
 
 ### `op list`
-Nyitott work package-ek listázása a REST API `filters` paraméterével. Alapértelmezett szűrés: hozzám rendelt (`assignee = me`) és nyitott státusz. `--team` esetén az assignee szűrés elmarad, így a csapat összes nyitott feladata látszik. Ha van `.op_info`, akkor hozzáad egy projekt szűrőt is. Kimenet JSON formában projektenként csoportosítva; `--table` kapcsolóval a `tabulate` segédprogram segítségével táblázatos ASCII nézetet ad.
+
+Lists open work packages using the OpenProject REST API `filters` parameter. By default, it returns open tickets assigned to the current user. If the current directory has a `.op_info` file, the command also filters by that project.
+
+Use `--team` to remove the assignee filter and show all open team work packages. Use `--table` to render a readable ASCII table through `tabulate`; otherwise the output is grouped JSON by project.
 
 ### `op review`
-Az `op list` (JSON) kimenetén iterálva minden jegyet külön-külön felkínál szerkesztésre. Interaktív TTY-t igényel. Jegyenként módosítható:
-- státusz (név vagy ID, `?` listázza az elérhető státuszokat)
-- készültségi százalék (`percentageDone`)
-- prioritás (név vagy ID)
-A jóváhagyott változtatásokat `api_patch` hívással küldi el.
 
-### `op status [jegy_id]`
-Megjeleníti a megadott vagy a git branch alapján azonosított jegy fő metaadatait (`project`, `subject`, `assignee`, `type`, `status`, `percentageDone`, `spentTime`). Az azonosító hiányában a `get_ticket_id` segédprogramot használja (branch névben található első szám).
+Runs an interactive review flow over the JSON output of `op list`. It requires an interactive TTY and lets you update each work package individually.
 
-### `op wip [jegy_id]`
-Az aktuális vagy megadott jegy státuszát „in progress”-re állítja (status id 6). A frissítéshez először lekéri a `lockVersion` értéket, majd `api_patch`-sel küld payloadot.
+Editable fields:
 
-### `op close [jegy_id]`
-Hasonlóan működik, mint az `op wip`, de a státuszt „closed”-ra állítja (status id 10). Sikeres futás után `#<id> closed.` üzenetet ír.
+- Status by name or ID; `?` lists available statuses
+- Completion percentage via `percentageDone`
+- Priority by name or ID
 
-### `op log <óraszám> "komment" [--tegnap|--nap=YYYY-MM-DD]`
-Időráfordítást naplóz az aktuális jegyhez. A `--tegnap` kapcsoló automatikusan előző napra állítja a dátumot (platformfüggő `date` hívásokkal), a `--nap` kapcsolóval explicit dátum adható meg. Az óraszámot ISO 8601 időtartamra konvertálja (pl. `3.5` → `PT3H30M`). A payload tartalmazza a projekt linket, a work package linket és az időbejegyzés típusát (`/api/v3/time_entries/activities/9`).
+Approved changes are sent through the OpenProject API with `PATCH` requests.
 
-### `op report [YYYY-MM-DD]`
-Időjelentést készít a saját bejegyzéseidről egy adott napra. Paraméter nélkül a mai napra kérdezi le az adatokat, különben a megadott `YYYY-MM-DD` dátumra szűr (a formátum érvényesítve van). A lekérdezés az `OpenProject` `time_entries` végpontját hívja meg `spent_on = dátum` és `user = me` szűrőkkel, majd az eredményt kompakt JSON-ba rendezi:
+### `op status [work_package_id]`
 
-- `date`: a lekért nap
-- `entryCount`: hány bejegyzést talált
-- `totalHours`: a nap összesített óraszáma (2 tizedesre kerekítve)
-- `entries[]`: részletes elemek `id`, `spentOn`, `hoursISO`, `hoursDecimal`, `comment`, valamint a kapcsolódó projekt/work package/activity/user metaadataival
+Shows key metadata for an explicit work package ID, or for the first numeric ID found in the current Git branch name when no ID is provided.
 
-Az output közvetlenül felhasználható további automatizálásokhoz vagy jelentésekhez.
+Displayed fields include project, subject, assignee, type, status, completion percentage, and spent time.
 
-### `op calendar [YYYY.MM|MM|honap|-N]`
-ASCII havi naptár nézetet ad hétfői hétkezdettel. A nézet minden héthez külön sorban mutatja a hét tartományát (`MM.DD-MM.DD`), és a munkanapok celláiban a napi összesített logolt órát (`xh`) színezve:
+### `op wip [work_package_id]`
 
-- zöld: `>= 8h`
-- sárga: `0 < h < 8`
-- piros: `0h`
+Sets the current or specified work package to `in progress` using status ID `6`. The command first fetches the current `lockVersion`, then sends the update payload with a `PATCH` request.
 
-Viselkedés:
+### `op close [work_package_id]`
 
-- hétvégék cellái üresek
-- jövőbeli dátumok cellái mindig üresek
-- mai nap cellája kiemelt (vastagabb szín + `>` prefix)
-- ha van `.op_info`, akkor projektre is szűr, különben az összes saját időbejegyzést veszi figyelembe
+Sets the current or specified work package to `closed` using status ID `10`. On success, it prints `#<id> closed.`.
 
-Hónapválasztás:
+### `op log <work_package_id> <hours> ["comment"] [--tegnap|--nap=YYYY-MM-DD]`
 
-- argumentum nélkül: aktuális hónap
-- `MM` vagy hónapnév (`jan`, `feb`, ...): a legközelebbi múltbeli ilyen hónap
-- `YYYY.MM`: konkrét hónap
-- `-N`: ennyi hónappal korábbi időszak (pl. `-1`, `-4`)
+Logs time on an explicit work package ID. Unlike `op status`, `op wip`, and `op close`, this command does not infer the work package ID from the current Git branch. The comment is optional.
 
-### `op create "Cím" ["Leírás"]`
-Új work package-et hoz létre az `op init` során beállított projektben, és automatikusan hozzád rendeli. Lekéri a felhasználói ID-t (`/api/v3/users/me`), szükség esetén Markdown leírást is küld. A sikeres válaszból kompakt JSON-t (`id`, `title`, `status`) ír ki.
+Date options:
+
+- No date option: log for today
+- `--tegnap`: log for yesterday
+- `--nap=YYYY-MM-DD`: log for an explicit date
+
+The hour value is converted to an ISO 8601 duration. For example, `3.5` becomes `PT3H30M`.
+
+The payload includes links to the project, work package, and time entry activity `/api/v3/time_entries/activities/9`. A comment is included only when provided.
+
+### `op report [--table] [YYYY-MM-DD]`
+
+Prints a report of your own time entries for a given day. Without a date argument, it uses today. With a date argument, it validates and filters by the provided `YYYY-MM-DD` date. If `.op_info` exists, the report is also filtered to the linked project.
+
+Default JSON output contains:
+
+- `projects`: an object keyed by project name
+- `projects.<name>.entries[]`: entries with `hours`, `workPackageId`, and `workPackageTitle`
+- `projects.<name>.sumHours`: total hours for that project
+- `sumHours`: total hours for the full report
+
+Use `--table` to print a terminal table with project, work package ID, title, and hours, followed by the total hour count.
+
+### `op calendar [--json] [YYYY.MM|MM|month|-N]`
+
+Shows a monthly worklog calendar. By default, it renders an ASCII calendar with Monday as the first day of the week. Each week is shown as a date range, and each workday cell contains the total logged hours for that day.
+
+Color meaning in ASCII mode:
+
+- Green: `>= 8h`
+- Yellow: `0 < h < 8`
+- Red: `0h`
+
+Calendar behavior:
+
+- Weekend cells are empty
+- Future dates are empty
+- Today is highlighted with stronger styling and a `>` prefix
+- If `.op_info` exists, entries are filtered by the linked project; otherwise all personal time entries are included
+
+Month selection:
+
+- No argument: current month
+- `MM` or month name such as `jan`, `feb`: nearest past matching month
+- `YYYY.MM` or `YYYY-MM`: explicit month
+- `-N`: month offset, for example `-1` or `-4`
+
+Use `--json` for machine-readable output. The JSON response contains month metadata, daily sums in `daySums`, and weekly breakdowns in `weeks[].days[]` with date, weekday, and hours.
+
+### `op create "Title" ["Description"] [--projectId=<id>]`
+
+Creates a new work package and assigns it to the current user.
+
+Project selection order:
+
+- Explicit `--projectId=<id>` or `--projectId <id>`
+- Project configured in `.op_info`
+
+The command resolves the current user via `/api/v3/users/me`, sends the optional Markdown description when provided, and prints compact JSON with `id`, `title`, and `status` on success.
 
 ### `op health`
-Egyszerű healthcheck parancs, ami csak azt ellenőrzi, hogy az `OP_BASE_URL` és `OP_TOKEN` használatával elérhető-e az OpenProject API (`/api/v3/users/me`).
 
-- siker esetén: `0` exit code
-- hiba esetén (rossz token, hibás URL, nem elérhető szerver): `1` exit code
+Checks whether the OpenProject API is reachable with the configured `OP_BASE_URL` and `OP_TOKEN` by calling `/api/v3/users/me`.
+
+Exit codes:
+
+- `0`: success
+- `1`: invalid token, invalid URL, unavailable server, or another connection failure
 
 ### `op version`
-Kiírja az eszköz aktuális verzióját egy sorban.
 
-### `op prio [--team] [--dry-run] <azonosítók vagy minták...>`
-Az `op list` által látható jegyek körében dolgozik. A megadott azonosítók lehetnek számszerű work package ID-k vagy subject-részletek (kis/nagybetűfüggetlen). Ha egy minta több találatot ad, a parancs leáll, hogy elkerülje a véletlen módosításokat. A kiválasztott jegyek prioritását „High”-ra emeli, az összes többi látható jegy státuszát „on hold”-ra állítja. `--team` esetén az assignee szűrés lekerül, `--dry-run` módban csak a tervezett változtatásokat listázza.
+Prints the current CLI version on a single line.
 
-### `op enum_status [név]`
-Státusz-azonosítók listáját adja vissza. Argumentum nélkül egy JSON objektumot kapsz `{"status name": id}` formátumban. Ha megadsz egy státusz nevet, csak az adott azonosítót írja ki, ami más szkriptek (pl. `op prio`) számára is felhasználható.
+### `op prio [--team] [--dry-run] <ids or patterns...>`
+
+Prioritizes visible work packages from the `op list` result set. Arguments can be numeric work package IDs or case-insensitive subject fragments.
+
+If a pattern matches multiple tickets, the command stops to prevent accidental updates. Selected tickets are raised to `High` priority, while every other visible ticket is moved to `on hold`.
+
+Use `--team` to remove the assignee filter. Use `--dry-run` to show the planned changes without sending API updates.
+
+### `op enum_status [name]`
+
+Prints OpenProject status IDs. Without an argument, the command returns a JSON object in this form:
+
+```json
+{
+  "status name": 1
+}
+```
+
+When a status name is provided, only the matching ID is printed. This is useful for shell scripts and automation around commands such as `op prio`.
 
 ### `op queries`
-Az OpenProject `queries` végpontjának teljes JSON válaszát adja vissza. Jól jön előre definiált nézetek/lekérdezések auditálásához vagy egyedi reportokhoz.
+
+Prints the full JSON response from the OpenProject `queries` endpoint. This is useful for auditing predefined views, discovering available queries, or building custom reports.
+
+## Typical Workflow
+
+```bash
+op health
+op init my-project
+op list --table
+op status
+op wip
+op log 12345 2.5 "Implemented API integration"
+op report
+op calendar
+```
+
+## Notes
+
+- `op status`, `op wip`, and `op close` infer the work package ID from the first number in the current Git branch name when no ID is provided.
+- `op log` always requires an explicit work package ID.
+- `.op_info` is local project metadata. Commit it only if that project binding is intentionally shared by the repository.
+- Some commands use fixed OpenProject status or activity IDs; adjust the scripts if your OpenProject instance uses different IDs.
