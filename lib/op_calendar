@@ -4,25 +4,42 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR"
 
 if [ "$1" == "--summary" ]; then
-  echo "Havi ASCII naptar sajat napi oraosszegekkel"
+  echo "Havi naptar sajat napi oraosszegekkel, opcionisan JSON-kent"
   exit 0
 fi
 
 if [ "$1" == "--desc" ]; then
-  echo "Aktualis vagy megadott honapra ASCII naptar nezetet ad hetfo kezdettel, napi osszesitett munkaorakkal es szinezett cellakkal."
-  echo "Hasznalat: op calendar [YYYY.MM|MM|honapnev|-N]"
+  echo "Aktualis vagy megadott honapra ASCII naptar nezetet ad hetfo kezdettel, napi osszesitett munkaorakkal es szinezett cellakkal, vagy --json kapcsoloval strukturalt kimenetet ad."
+  echo "Hasznalat: op calendar [--json] [YYYY.MM|MM|honapnev|-N]"
   exit 0
 fi
 
 usage() {
-  echo "Hasznalat: op calendar [YYYY.MM|MM|honapnev|-N]" >&2
-  echo "Peldak: op calendar | op calendar 02 | op calendar jan | op calendar 2024.11 | op calendar -1" >&2
+  echo "Hasznalat: op calendar [--json] [YYYY.MM|MM|honapnev|-N]" >&2
+  echo "Peldak: op calendar | op calendar --json | op calendar 02 | op calendar jan | op calendar 2024.11 | op calendar --json -1" >&2
   exit 1
 }
 
-if [ "$#" -gt 1 ]; then
-  usage
-fi
+OUTPUT_JSON=0
+INPUT=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --json)
+      OUTPUT_JSON=1
+      ;;
+    --*)
+      usage
+      ;;
+    *)
+      if [ -n "$INPUT" ]; then
+        usage
+      fi
+      INPUT="$1"
+      ;;
+  esac
+  shift
+done
 
 is_darwin() {
   [[ "$OSTYPE" == "darwin"* ]]
@@ -144,7 +161,6 @@ format_hours() {
 
 CURRENT_YEAR=$(date +%Y)
 CURRENT_MONTH=$(date +%m)
-INPUT="${1:-}"
 
 TARGET_YEAR=""
 TARGET_MONTH=""
@@ -323,6 +339,128 @@ center_text() {
   printf "%*s%s%*s" "$left" "" "$text" "$right" ""
 }
 
+build_calendar_json() {
+  local weeks_json="[]"
+  local week_start="$CAL_START"
+  local weeks_buf=""
+  local weeks_sep=""
+
+  while [[ "$week_start" < "$CAL_END" || "$week_start" == "$CAL_END" ]]; do
+    local week_end days_json day_shift day day_month weekday hours is_in_month is_weekend is_future is_visible
+    local days_buf=""
+    local days_sep=""
+    week_end=$(date_add_days "$week_start" 6)
+
+    for day_shift in 0 1 2 3 4 5 6; do
+      day=$(date_add_days "$week_start" "$day_shift")
+      day_month=$(date_month "$day")
+      weekday=$(date_weekday_mon1 "$day")
+      hours=$(printf '%s' "$DAY_SUMS_JSON" | jq -r --arg d "$day" '.[$d] // 0')
+
+      if [ "$day_month" = "$TARGET_MONTH" ]; then
+        is_in_month=true
+      else
+        is_in_month=false
+      fi
+
+      if [ "$weekday" -ge 6 ]; then
+        is_weekend=true
+      else
+        is_weekend=false
+      fi
+
+      if [[ "$day" > "$TODAY" ]]; then
+        is_future=true
+      else
+        is_future=false
+      fi
+
+      if [ "$is_in_month" = true ] && [ "$is_weekend" = false ] && [ "$is_future" = false ]; then
+        is_visible=true
+      else
+        is_visible=false
+      fi
+
+      days_buf+="${days_sep}$(jq -cn \
+        --arg date "$day" \
+        --arg dayNumber "$((10#$(date_day_number "$day")))" \
+        --arg weekday "$weekday" \
+        --arg month "$day_month" \
+        --arg hours "$hours" \
+        --arg inMonth "$is_in_month" \
+        --arg weekend "$is_weekend" \
+        --arg future "$is_future" \
+        --arg visible "$is_visible" \
+        --arg isToday "$([ "$day" = "$TODAY" ] && printf 'true' || printf 'false')" '
+          {
+            date: $date,
+            day: ($dayNumber | tonumber),
+            month: ($month | tonumber),
+            weekday: ($weekday | tonumber),
+            isToday: ($isToday == "true"),
+            isFuture: ($future == "true"),
+            isWeekend: ($weekend == "true"),
+            isInTargetMonth: ($inMonth == "true"),
+            isVisible: ($visible == "true"),
+            hours: ($hours | tonumber)
+          }
+        ')"
+      days_sep=","
+    done
+
+    days_json="[$days_buf]"
+
+    weeks_buf+="${weeks_sep}$(jq -cn \
+      --arg weekStart "$week_start" \
+      --arg weekEnd "$week_end" \
+      --arg rangeLabel "$(date_format_mmdd "$week_start")-$(date_format_mmdd "$week_end")" \
+      --argjson days "$days_json" '
+        {
+          weekStart: $weekStart,
+          weekEnd: $weekEnd,
+          rangeLabel: $rangeLabel,
+          days: $days
+        }
+      ' )"
+    weeks_sep=","
+
+    week_start=$(date_add_days "$week_start" 7)
+  done
+
+  weeks_json="[$weeks_buf]"
+
+  jq -n \
+    --arg year "$((10#$TARGET_YEAR))" \
+    --arg month "$((10#$TARGET_MONTH))" \
+    --arg monthStart "$MONTH_START" \
+    --arg monthEnd "$MONTH_END" \
+    --arg today "$TODAY" \
+    --arg projectId "$PID" \
+    --argjson daySums "$DAY_SUMS_JSON" \
+    --argjson weeks "$weeks_json" '
+      {
+        year: ($year | tonumber),
+        month: ($month | tonumber),
+        monthStart: $monthStart,
+        monthEnd: $monthEnd,
+        today: $today,
+        projectId: (if $projectId == "" then null else ($projectId | tonumber) end),
+        daySums: $daySums,
+        weeks: $weeks
+      }
+    '
+}
+
+FIRST_WDAY=$(date_weekday_mon1 "$MONTH_START")
+CAL_START=$(date_add_days "$MONTH_START" "$((1 - FIRST_WDAY))")
+LAST_WDAY=$(date_weekday_mon1 "$MONTH_END")
+CAL_END=$(date_add_days "$MONTH_END" "$((7 - LAST_WDAY))")
+
+if [ "$OUTPUT_JSON" -eq 1 ]; then
+  build_calendar_json
+  exit 0
+fi
+
 printf "OpenProject calendar: %s.%s\n" "$TARGET_YEAR" "$TARGET_MONTH"
 separator
 printf "| %-*s |" "$RANGE_W" "Het"
@@ -335,11 +473,6 @@ print_centered_cell "Szo" "$CELL_W"
 print_centered_cell "V" "$CELL_W"
 printf "\n"
 separator
-
-FIRST_WDAY=$(date_weekday_mon1 "$MONTH_START")
-CAL_START=$(date_add_days "$MONTH_START" "$((1 - FIRST_WDAY))")
-LAST_WDAY=$(date_weekday_mon1 "$MONTH_END")
-CAL_END=$(date_add_days "$MONTH_END" "$((7 - LAST_WDAY))")
 
 WEEK_START="$CAL_START"
 while [[ "$WEEK_START" < "$CAL_END" || "$WEEK_START" == "$CAL_END" ]]; do

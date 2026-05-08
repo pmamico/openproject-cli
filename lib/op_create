@@ -11,29 +11,66 @@ if [ "${1:-}" == "--summary" ]; then
 fi
 
 if [ "${1:-}" == "--desc" ]; then
-  echo "Használat: op create \"Cím\" \"Leírás (opcionális)\" — A projektet előtte op init-tel állítsd be (.op_info)."
+  echo "Használat: op create \"Cím\" [\"Leírás\"] [--projectId=<id>] — Alapból .op_info projektet használ, --projectId-val felülírható."
   exit 0
 fi
 
 # Args
-if [ $# -lt 1 ]; then
-  echo "Használat: op create \"Cím\" \"Leírás (opcionális)\"" >&2
+PROJECT_ID_OVERRIDE=""
+POSITIONAL=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --projectId=*)
+      PROJECT_ID_OVERRIDE="${1#*=}"
+      shift
+      ;;
+    --projectId)
+      if [ -z "${2:-}" ]; then
+        echo "Hiányzó érték: --projectId <id>" >&2
+        exit 1
+      fi
+      PROJECT_ID_OVERRIDE="$2"
+      shift 2
+      ;;
+    --*)
+      echo "Ismeretlen kapcsoló: $1" >&2
+      exit 1
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ ${#POSITIONAL[@]} -lt 1 ] || [ ${#POSITIONAL[@]} -gt 2 ]; then
+  echo "Használat: op create \"Cím\" [\"Leírás\"] [--projectId=<id>]" >&2
   exit 1
 fi
 
-SUBJECT="$1"
-DESC="${2:-}"
+SUBJECT="${POSITIONAL[0]}"
+DESC="${POSITIONAL[1]:-}"
 
-# Project context (.op_info required)
-OP_INFO_PATH=".op_info"
-if [ ! -f "$OP_INFO_PATH" ]; then
-  echo "Hiányzik a projekt beállítás (.op_info). Előbb op init-elni kell a projektet." >&2
-  exit 1
+# Resolve project id: explicit override or .op_info
+if [ -n "$PROJECT_ID_OVERRIDE" ]; then
+  PROJECT_ID="$PROJECT_ID_OVERRIDE"
+else
+  OP_INFO_PATH=".op_info"
+  if [ ! -f "$OP_INFO_PATH" ]; then
+    echo "Hiányzik a projekt beállítás (.op_info). Add meg a projektet: --projectId=<id> vagy futtasd: op init" >&2
+    exit 1
+  fi
+
+  PROJECT_ID="$(jq -r '.project_id // empty' "$OP_INFO_PATH" 2>/dev/null || true)"
+  if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
+    echo "Hibás .op_info (project_id hiányzik). Futtasd újra: op init, vagy add meg: --projectId=<id>" >&2
+    exit 1
+  fi
 fi
 
-PROJECT_ID="$(jq -r '.project_id // empty' "$OP_INFO_PATH" 2>/dev/null || true)"
-if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
-  echo "Hibás .op_info (project_id hiányzik). Futtasd újra: op init" >&2
+if ! [[ "$PROJECT_ID" =~ ^[0-9]+$ ]]; then
+  echo "Érvénytelen projectId: $PROJECT_ID" >&2
   exit 1
 fi
 

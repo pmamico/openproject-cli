@@ -4,7 +4,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR"
 
 if [ "$1" == "--summary" ]; then
-  echo "Időráfordítás naplózása megadott work package-hez (óra + megjegyzés)"
+  echo "Időráfordítás naplózása megadott work package-hez (óra + opcionális megjegyzés)"
   exit 0
 fi
 
@@ -84,10 +84,14 @@ if [ -z "$SPENT_ON" ]; then
 fi
 
 # --- időlog JSON payload ---
+COMMENT_FIELD=""
+if [ -n "$COMMENT" ]; then
+  COMMENT_FIELD=$(printf '  "comment": %s,\n' "$(jq -Rn --arg comment "$COMMENT" '$comment')")
+fi
+
 read -r -d '' PAYLOAD <<EOF
 {
-  "comment": "$COMMENT",
-  "spentOn": "$SPENT_ON",
+${COMMENT_FIELD}  "spentOn": "$SPENT_ON",
   "hours": "$ISO_HOURS",
   "_links": {
     "workPackage": {
@@ -106,4 +110,8 @@ EOF
 # --- hívás ---
 "$LIB_DIR"/api_post "/api/v3/time_entries" "$PAYLOAD" >/dev/null
 
-echo "✅ $HOURS óra rögzítve (#$WORKPACKAGE_ID) – \"$COMMENT\" ($SPENT_ON)"
+if [ -n "$COMMENT" ]; then
+  echo "✅ $HOURS óra rögzítve (#$WORKPACKAGE_ID) - \"$COMMENT\" ($SPENT_ON)"
+else
+  echo "✅ $HOURS óra rögzítve (#$WORKPACKAGE_ID) ($SPENT_ON)"
+fi

@@ -2,6 +2,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR"
+BASE_URL="${OP_BASE_URL%/}"
 
 
 if [ "$1" == "--summary" ]; then
@@ -51,7 +52,7 @@ ENCODED=$(jq -rn --argjson f "$FILTERS_JSON" '$f | @uri')
 
 DATA=$("$LIB_DIR"/api_get "/api/v3/work_packages?filters=$ENCODED")
 
-ITEMS_RAW=$(echo "$DATA" | jq '
+ITEMS_RAW=$(echo "$DATA" | jq --arg base "$BASE_URL" '
   ._embedded.elements
   | map({
       id,
@@ -59,13 +60,14 @@ ITEMS_RAW=$(echo "$DATA" | jq '
       status: ._links.status.title,
       subject,
       priority: (._links.priority.title // ""),
-      percentageDone: (.percentageDone // 0)
+      percentageDone: (.percentageDone // 0),
+      link: ($base + "/work_packages/" + (.id | tostring))
     })
   | sort_by([.project, .id])
 ')
 
 if [ "$TABLE_MODE" = true ]; then
-  echo "$ITEMS_RAW" | jq -r '
+  echo "$ITEMS_RAW" | jq 'map(del(.link))' | jq -r '
     (.[0] | keys_unsorted) as $keys
     | $keys,
       (.[] | [.[$keys[]]])
