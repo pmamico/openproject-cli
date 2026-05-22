@@ -60,6 +60,7 @@ This creates a local `.op_info` file containing the selected OpenProject project
 | `op report [YYYY-MM-DD]` | Print your time entries for a day as grouped JSON | `--table`, optional date |
 | `op calendar [--json] [month]` | Show a monthly worklog calendar as ASCII or JSON | `--json`, `-1`, `02`, `jan`, `2024.11` |
 | `op create "Title" ["Description"]` | Create a new work package assigned to you | `--projectId=<id>` |
+| `op rename <id> "New title"` | Rename a work package by explicit ID | - |
 | `op health` | Check OpenProject API connectivity | Exit code `0` on success, `1` on failure |
 | `op version` | Print the CLI version | - |
 | `op prio [options] <ids...>` | Raise selected tickets to high priority and put others on hold | `--team`, `--dry-run` |
@@ -199,6 +200,12 @@ Project selection order:
 
 The command resolves the current user via `/api/v3/users/me`, sends the optional Markdown description when provided, and prints compact JSON with `id`, `title`, and `status` on success.
 
+### `op rename <work_package_id> "New title"`
+
+Renames an explicit work package by updating its `subject`. The command first fetches the current `lockVersion`, then sends a `PATCH` request with the new title.
+
+On success, it prints `#<id> renamed to: <new title>`.
+
 ### `op health`
 
 Checks whether the OpenProject API is reachable with the configured `OP_BASE_URL` and `OP_TOKEN` by calling `/api/v3/users/me`.
@@ -244,6 +251,7 @@ op init my-project
 op list --table
 op status
 op wip
+op rename 12345 "Updated title"
 op log 12345 2.5 "Implemented API integration"
 op report
 op calendar
@@ -252,6 +260,7 @@ op calendar
 ## Notes
 
 - `op status`, `op wip`, and `op close` infer the work package ID from the first number in the current Git branch name when no ID is provided.
+- `op rename` always requires an explicit work package ID.
 - `op log` always requires an explicit work package ID.
 - `.op_info` is local project metadata. Commit it only if that project binding is intentionally shared by the repository.
 - Some commands use fixed OpenProject status or activity IDs; adjust the scripts if your OpenProject instance uses different IDs.

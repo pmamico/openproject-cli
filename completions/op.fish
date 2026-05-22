@@ -2,7 +2,7 @@ function __op_commands
     set -l help_lines (op help 2>/dev/null | string split \n)
 
     if test (count $help_lines) -eq 0
-        for cmd in init project_list list review status wip close log report calendar create health version prio enum_status queries
+        for cmd in init project_list list review status wip close log report calendar create rename health version prio enum_status queries
             echo $cmd
         end
         return
