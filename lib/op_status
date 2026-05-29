@@ -31,6 +31,8 @@ fi
 {
   projekt:      ._links.project.title,
   cim:          .subject,
+  parent:       ._links.parent.title,
+  parent_id:    ((._links.parent.href // "") | split("/") | last | if test("^[0-9]+$") then . else null end),
   assignee:     ._links.assignee.title,
   tipus:        ._links.type.title,
   status:          ._links.status.title,

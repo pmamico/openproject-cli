@@ -1,9 +1,10 @@
-# OpenProject integrációs specifikáció (jegy lekérdezés + jegy létrehozás)
+# OpenProject integrációs specifikáció (jegy lekérdezés + létrehozás + parent kezelés)
 
-Ez a dokumentum implementációs szintű leírást ad egy agent számára, hogy stabil OpenProject integrációt készítsen két fő funkcióval:
+Ez a dokumentum implementációs szintű leírást ad egy agent számára, hogy stabil OpenProject integrációt készítsen három fő funkcióval:
 
 1. saját (hozzám rendelt) nyitott jegyek lekérdezése
 2. új jegy létrehozása
+3. jegy parent beállítása
 
 Az itt leírtak az aktuális repository viselkedésével kompatibilisek.
 
@@ -98,10 +99,14 @@ Javasolt normalizált kimeneti példa:
 
 ### Projekt ID feloldási szabály
 
-Kötelező explicit bemenet: `projectId` paraméter.
+Feloldási sorrend:
+
+- explicit `projectId` paraméter
+- lokális `.op_info` fájl `project_id` mezője
 
 Validáció:
 
+- ha egyik forrásból sem oldható fel, a kérés kliens oldali hibával álljon le
 - `projectId` csak numerikus lehet
 
 ### Assignee feloldás
@@ -123,6 +128,7 @@ Kötelező:
 Opcionális:
 
 - `description`
+- `parent`
 
 Payload leírás nélkül:
 
@@ -131,6 +137,18 @@ Payload leírás nélkül:
   "subject": "API rate limiting bug",
   "_links": {
     "assignee": { "href": "/api/v3/users/17" }
+  }
+}
+```
+
+Payload parenttel:
+
+```json
+{
+  "subject": "API rate limiting bug",
+  "_links": {
+    "assignee": { "href": "/api/v3/users/17" },
+    "parent": { "href": "/api/v3/work_packages/200" }
   }
 }
 ```
@@ -164,13 +182,72 @@ Javasolt visszaadott objektum:
 {
   "id": 987,
   "title": "API rate limiting bug",
-  "status": "New"
+  "status": "New",
+  "parentId": 200
 }
 ```
 
 Ha nincs `id` a válaszban, hibának kell tekinteni.
 
-## 4. Hibakezelési szerződés
+## 4. Jegy parent beállítása
+
+### UX és parancsdesign
+
+Javasolt két használati mód:
+
+- `op parent <parentId>`: az aktuális branch-ből feloldott jegy parentjét állítja
+- `op parent <workPackageId> <parentId>`: explicit child + explicit parent
+
+Miért ez a design:
+
+- konzisztens az olyan parancsokkal, mint az `op status`, `op wip`, `op close`
+- biztonságosabb, mint subject alapú keresés
+- minimális új felületet vezet be
+
+### Végpont
+
+- `PATCH /api/v3/work_packages/<WORK_PACKAGE_ID>`
+
+### Kötelező előlépés
+
+Frissítés előtt le kell kérdezni a jegyet:
+
+- `GET /api/v3/work_packages/<WORK_PACKAGE_ID>`
+- használandó mező: `lockVersion`
+
+Ha nincs `lockVersion`, a folyamat hibával leáll.
+
+### Payload
+
+```json
+{
+  "lockVersion": 7,
+  "_links": {
+    "parent": { "href": "/api/v3/work_packages/200" }
+  }
+}
+```
+
+### Validáció
+
+- a child `workPackageId` csak numerikus lehet
+- a `parentId` csak numerikus lehet
+- a child és parent ID nem lehet azonos
+
+### Sikeres válasz minimális feldolgozása
+
+Javasolt minimum ellenőrzés:
+
+- `._links.parent.href`
+- opcionálisan `._links.parent.title`
+
+Javasolt emberi kimenet:
+
+```text
+#123 parent set to: #200 - Epic container hardening
+```
+
+## 5. Hibakezelési szerződés
 
 Minimum elvárás:
 
@@ -189,26 +266,30 @@ Ajánlott hibastruktúra integrációkhoz:
 }
 ```
 
-## 5. Agent implementációs lépések (checklist)
+## 6. Agent implementációs lépések (checklist)
 
 1. olvasd be `OP_BASE_URL` és `OP_TOKEN` értékeket
 2. készíts közös HTTP klienst (GET/POST), Basic Auth headerrel
 3. implementáld `getMyOpenTickets()` függvényt a filter logikával
-4. implementáld `createTicket({ subject, description?, projectId })` függvényt
+4. implementáld `createTicket({ subject, description?, projectId, parentId? })` függvényt
 5. `createTicket` előtt kérd le a `users/me` azonosítót assignee-hez
-6. validáld a bemenetet és kezeld explicit a hibákat
-7. normalizáld a kimeneteket a fenti JSON modellekre
+6. implementáld a `setParent({ workPackageId, parentId })` műveletet `lockVersion` alapú frissítéssel
+7. validáld a bemenetet és kezeld explicit a hibákat
+8. normalizáld a kimeneteket a fenti JSON modellekre
 
-## 6. Gyors végpont-összefoglaló
+## 7. Gyors végpont-összefoglaló
 
 - `GET /api/v3/users/me` - aktuális user feloldása
 - `GET /api/v3/work_packages?filters=...` - saját nyitott jegyek
 - `POST /api/v3/projects/<id>/work_packages` - új jegy létrehozása
+- `GET /api/v3/work_packages/<id>` - lockVersion lekérése parent frissítéshez
+- `PATCH /api/v3/work_packages/<id>` - parent beállítása
 
-## 7. Minimális elfogadási kritériumok
+## 8. Minimális elfogadási kritériumok
 
 - helyes authentikáció (`apikey:<token>` Basic)
 - saját nyitott jegyek lekérdezése működik
-- `projectId` kötelező paraméterként kezelve működik
-- új jegy létrehozás működik `subject` + opcionális `description` mezőkkel
+- `projectId` explicit paraméterből vagy `.op_info`-ból feloldva működik
+- új jegy létrehozás működik `subject` + opcionális `description` + opcionális `parent` mezőkkel
+- meglévő jegy parent beállítás működik külön parancsból
 - hibaágak olvasható üzenetet adnak

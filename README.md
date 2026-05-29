@@ -59,7 +59,9 @@ This creates a local `.op_info` file containing the selected OpenProject project
 | `op log <id> <hours> ["comment"]` | Log time on a specific work package | `--tegnap`, `--nap=YYYY-MM-DD` |
 | `op report [YYYY-MM-DD]` | Print your time entries for a day as grouped JSON | `--table`, optional date |
 | `op calendar [--json] [month]` | Show a monthly worklog calendar as ASCII or JSON | `--json`, `-1`, `02`, `jan`, `2024.11` |
-| `op create "Title" ["Description"]` | Create a new work package assigned to you | `--projectId=<id>` |
+| `op create "Title" ["Description"]` | Create a new work package assigned to you | `--projectId=<id>`, `--parentId=<id>` |
+| `op parent <parent_id>` | Set the current branch ticket's parent | - |
+| `op parent <id> <parent_id>` | Set a specific work package's parent | - |
 | `op rename <id> "New title"` | Rename a work package by explicit ID | - |
 | `op health` | Check OpenProject API connectivity | Exit code `0` on success, `1` on failure |
 | `op version` | Print the CLI version | - |
@@ -126,7 +128,9 @@ Approved changes are sent through the OpenProject API with `PATCH` requests.
 
 Shows key metadata for an explicit work package ID, or for the first numeric ID found in the current Git branch name when no ID is provided.
 
-Displayed fields include project, subject, assignee, type, status, completion percentage, and spent time.
+The output now also includes the parent work package title and `parent_id` when the ticket is part of a hierarchy.
+
+Displayed fields include project, subject, optional parent, assignee, type, status, completion percentage, and spent time.
 
 ### `op wip [work_package_id]`
 
@@ -189,7 +193,7 @@ Month selection:
 
 Use `--json` for machine-readable output. The JSON response contains month metadata, daily sums in `daySums`, and weekly breakdowns in `weeks[].days[]` with date, weekday, and hours.
 
-### `op create "Title" ["Description"] [--projectId=<id>]`
+### `op create "Title" ["Description"] [--projectId=<id>] [--parentId=<id>]`
 
 Creates a new work package and assigns it to the current user.
 
@@ -198,7 +202,19 @@ Project selection order:
 - Explicit `--projectId=<id>` or `--projectId <id>`
 - Project configured in `.op_info`
 
-The command resolves the current user via `/api/v3/users/me`, sends the optional Markdown description when provided, and prints compact JSON with `id`, `title`, and `status` on success.
+Use `--parentId=<id>` or `--parentId <id>` to create the work package directly under an existing parent work package.
+
+The command resolves the current user via `/api/v3/users/me`, sends the optional Markdown description and parent link when provided, and prints compact JSON with `id`, `title`, `status`, and `parentId` on success.
+
+### `op parent <parent_id>`
+
+Sets the parent of the current branch work package. The command infers the child work package ID from the first numeric fragment in the current Git branch name.
+
+### `op parent <work_package_id> <parent_id>`
+
+Sets the parent of an explicit work package. The command first fetches the current `lockVersion`, then sends a `PATCH` request with the `_links.parent` update.
+
+On success, it prints `#<id> parent set to: #<parent_id>` and includes the parent title when the API returns it.
 
 ### `op rename <work_package_id> "New title"`
 
@@ -250,6 +266,7 @@ op health
 op init my-project
 op list --table
 op status
+op parent 12000
 op wip
 op rename 12345 "Updated title"
 op log 12345 2.5 "Implemented API integration"
@@ -260,6 +277,7 @@ op calendar
 ## Notes
 
 - `op status`, `op wip`, and `op close` infer the work package ID from the first number in the current Git branch name when no ID is provided.
+- `op parent` can either infer the child work package ID from the current Git branch or accept it explicitly.
 - `op rename` always requires an explicit work package ID.
 - `op log` always requires an explicit work package ID.
 - `.op_info` is local project metadata. Commit it only if that project binding is intentionally shared by the repository.

@@ -1,0 +1,85 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+if [ "${1:-}" == "--summary" ]; then
+  echo "Jegy parent beallitasa"
+  exit 0
+fi
+
+if [ "${1:-}" == "--desc" ]; then
+  echo "Hasznalat: op parent <parent_id> vagy op parent <work_package_id> <parent_id> - Beallitja a jegy parentjet."
+  exit 0
+fi
+
+if [ $# -eq 1 ]; then
+  if ! command -v "$LIB_DIR"/get_ticket_id >/dev/null 2>&1; then
+    echo "Hianyzik a get_ticket_id parancs" >&2
+    exit 1
+  fi
+
+  TICKET_ID="$($LIB_DIR/get_ticket_id)"
+  PARENT_ID="$1"
+elif [ $# -eq 2 ]; then
+  TICKET_ID="$1"
+  PARENT_ID="$2"
+else
+  echo "Hasznalat: op parent <parent_id> vagy op parent <work_package_id> <parent_id>" >&2
+  exit 1
+fi
+
+if ! [[ "$TICKET_ID" =~ ^[0-9]+$ ]]; then
+  echo "Ervenytelen jegy ID: $TICKET_ID" >&2
+  exit 1
+fi
+
+if ! [[ "$PARENT_ID" =~ ^[0-9]+$ ]]; then
+  echo "Ervenytelen parent ID: $PARENT_ID" >&2
+  exit 1
+fi
+
+if [ "$TICKET_ID" = "$PARENT_ID" ]; then
+  echo "A jegy nem lehet a sajat parentje (#$TICKET_ID)" >&2
+  exit 1
+fi
+
+WORK_PACKAGE_JSON="$($LIB_DIR/api_get "/api/v3/work_packages/$TICKET_ID")"
+LOCK_VERSION="$(echo "$WORK_PACKAGE_JSON" | jq -r '.lockVersion')"
+
+if [ -z "$LOCK_VERSION" ] || [ "$LOCK_VERSION" = "null" ]; then
+  echo "Nem sikerult lekerdezni a lockVersion erteket a jegyhez (#$TICKET_ID)" >&2
+  exit 1
+fi
+
+PAYLOAD="$(jq -n \
+  --arg parentHref "/api/v3/work_packages/$PARENT_ID" \
+  --argjson lockVersion "$LOCK_VERSION" \
+  '{
+    lockVersion: $lockVersion,
+    _links: {
+      parent: { href: $parentHref }
+    }
+  }')"
+
+RESP="$($LIB_DIR/api_patch "/api/v3/work_packages/$TICKET_ID" "$PAYLOAD")"
+UPDATED_PARENT_ID="$(echo "$RESP" | jq -r '._links.parent.href // "" | split("/") | last | select(test("^[0-9]+$"))' 2>/dev/null || true)"
+UPDATED_PARENT_TITLE="$(echo "$RESP" | jq -r '._links.parent.title // empty' 2>/dev/null || true)"
+
+if [ -z "$UPDATED_PARENT_ID" ]; then
+  MSG="$(echo "$RESP" | jq -r '.message // empty' 2>/dev/null || true)"
+  if [ -n "$MSG" ]; then
+    echo "Hiba a parent beallitasa kozben: $MSG" >&2
+  else
+    echo "Hiba a parent beallitasa kozben. Szerver valasz:" >&2
+    echo "$RESP" >&2
+  fi
+  exit 1
+fi
+
+if [ -n "$UPDATED_PARENT_TITLE" ]; then
+  echo "#$TICKET_ID parent set to: #$UPDATED_PARENT_ID - $UPDATED_PARENT_TITLE"
+else
+  echo "#$TICKET_ID parent set to: #$UPDATED_PARENT_ID"
+fi
