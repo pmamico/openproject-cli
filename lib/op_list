@@ -6,23 +6,73 @@ BASE_URL="${OP_BASE_URL%/}"
 
 
 if [ "$1" == "--summary" ]; then
-  echo "Hozzám rendelt feladatok (.op_info esetén csak az adott projektből) — kapcsolók: --team (mindenki), --table (táblázatos nézet)"
+  echo "Hozzám rendelt feladatok (.op_info esetén csak az adott projektből) — kapcsolók: --team, --table, --version"
   exit 0
 fi
 
 if [ "$1" == "--desc" ]; then
-  echo "Nyitott jegyek listázása. Alap: hozzám rendelt. --team esetén assignee szűrés nélkül. Ha van .op_info, csak az adott projektből. --table esetén táblázatos kimenet."
+  echo "Nyitott jegyek listázása. Alap: hozzám rendelt. --team esetén assignee szűrés nélkül. Ha van .op_info, csak az adott projektből. --version <id|név> esetén adott verzióra szűr. --table esetén táblázatos kimenet."
   exit 0
 fi
+
+resolve_version_id() {
+  local versions_json="$1"
+  local query="$2"
+
+  if [[ "$query" =~ ^[0-9]+$ ]]; then
+    echo "$versions_json" | jq -r --arg id "$query" '
+      map(select((.id | tostring) == $id))
+      | if length == 1 then .[0].id else empty end
+    '
+    return
+  fi
+
+  echo "$versions_json" | jq -r --arg q "$query" '
+    def norm: ascii_downcase;
+
+    (map(select((.name // "" | norm) == ($q | norm)))) as $exact
+    | if ($exact | length) == 1 then
+        $exact[0].id
+      elif ($exact | length) > 1 then
+        "__AMBIGUOUS__"
+      else
+        (map(select((.name // "" | norm) | contains($q | norm)))) as $partial
+        | if ($partial | length) == 1 then
+            $partial[0].id
+          elif ($partial | length) > 1 then
+            "__AMBIGUOUS__"
+          else
+            empty
+          end
+      end
+  '
+}
 
 # Kapcsoló: --team → ne csak a hozzám rendelt jegyek
 TEAM_MODE=false
 TABLE_MODE=false
-for arg in "$@"; do
-  case "$arg" in
-    --team) TEAM_MODE=true ;;
-    --table) TABLE_MODE=true ;;
+VERSION_QUERY=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --team)
+      TEAM_MODE=true
+      ;;
+    --table)
+      TABLE_MODE=true
+      ;;
+    --version=*)
+      VERSION_QUERY="${1#--version=}"
+      ;;
+    --version)
+      shift
+      if [ -z "$1" ]; then
+        echo "Hiányzó érték: --version <id|név>" >&2
+        exit 1
+      fi
+      VERSION_QUERY="$1"
+      ;;
   esac
+  shift
 done
 
 # Alap szűrők
@@ -47,6 +97,25 @@ if [ -f ".op_info" ]; then
   fi
 fi
 
+if [ -n "$VERSION_QUERY" ]; then
+  VERSIONS_JSON=$("$LIB_DIR"/get_versions_json)
+  VERSION_ID=$(resolve_version_id "$VERSIONS_JSON" "$VERSION_QUERY")
+
+  if [ "$VERSION_ID" = "__AMBIGUOUS__" ]; then
+    echo "A verzio megadasa nem egyertelmu: $VERSION_QUERY" >&2
+    echo "Szurj pontosabban, vagy ellenorizd: op versions \"$VERSION_QUERY\"" >&2
+    exit 1
+  fi
+
+  if [ -z "$VERSION_ID" ]; then
+    echo "Nem talalhato verzio: $VERSION_QUERY" >&2
+    echo "Elerheto verziok: op versions" >&2
+    exit 1
+  fi
+
+  FILTERS_JSON=$(jq -cn --argjson f "$FILTERS_JSON" --arg vid "$VERSION_ID" '$f + [{"version":{"operator":"=","values":[$vid]}}]')
+fi
+
 ENCODED=$(jq -rn --argjson f "$FILTERS_JSON" '$f | @uri')
 
 
@@ -59,6 +128,7 @@ ITEMS_RAW=$(echo "$DATA" | jq --arg base "$BASE_URL" '
       project: ._links.project.title,
       status: ._links.status.title,
       subject,
+      version: (._links.version.title // ""),
       priority: (._links.priority.title // ""),
       percentageDone: (.percentageDone // 0),
       link: ($base + "/work_packages/" + (.id | tostring))

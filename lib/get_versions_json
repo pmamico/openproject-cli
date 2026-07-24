@@ -1,0 +1,25 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+ENDPOINT="/api/v3/versions?pageSize=200"
+
+if [ -f ".op_info" ]; then
+  PROJECT_ID=$(jq -r '.project_id // empty' ".op_info" 2>/dev/null || true)
+  if [ -n "$PROJECT_ID" ]; then
+    ENDPOINT="/api/v3/projects/$PROJECT_ID/versions?pageSize=200"
+  fi
+fi
+
+ALL_VERSIONS='[]'
+NEXT_HREF="$ENDPOINT"
+
+while [ -n "$NEXT_HREF" ]; do
+  RESPONSE=$("$LIB_DIR"/api_get "$NEXT_HREF")
+  PAGE_ITEMS=$(echo "$RESPONSE" | jq '._embedded.elements // []')
+  ALL_VERSIONS=$(jq -cn --argjson all "$ALL_VERSIONS" --argjson page "$PAGE_ITEMS" '$all + $page')
+  NEXT_HREF=$(echo "$RESPONSE" | jq -r '._links.nextByOffset.href // empty')
+done
+
+echo "$ALL_VERSIONS"

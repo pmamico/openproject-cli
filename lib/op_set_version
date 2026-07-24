@@ -1,0 +1,106 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+resolve_version_id() {
+  local versions_json="$1"
+  local query="$2"
+
+  if [[ "$query" =~ ^[0-9]+$ ]]; then
+    echo "$versions_json" | jq -r --arg id "$query" '
+      map(select((.id | tostring) == $id))
+      | if length == 1 then .[0].id else empty end
+    '
+    return
+  fi
+
+  echo "$versions_json" | jq -r --arg q "$query" '
+    def norm: ascii_downcase;
+
+    (map(select((.name // "" | norm) == ($q | norm)))) as $exact
+    | if ($exact | length) == 1 then
+        $exact[0].id
+      elif ($exact | length) > 1 then
+        "__AMBIGUOUS__"
+      else
+        (map(select((.name // "" | norm) | contains($q | norm)))) as $partial
+        | if ($partial | length) == 1 then
+            $partial[0].id
+          elif ($partial | length) > 1 then
+            "__AMBIGUOUS__"
+          else
+            empty
+          end
+      end
+  '
+}
+
+if [ "$1" == "--summary" ]; then
+  echo "Jegy verziohoz/roadmaphez rendelese"
+  exit 0
+fi
+
+if [ "$1" == "--desc" ]; then
+  echo "Jegy verziojanak beallitasa. Hasznalat: op set_version <work_package_id> <version_id|version_nev>."
+  exit 0
+fi
+
+if [ $# -lt 2 ]; then
+  echo "Hasznalat: op set_version <work_package_id> <version_id|version_nev>" >&2
+  exit 1
+fi
+
+TICKET_ID="$1"
+shift
+VERSION_QUERY="$*"
+
+if ! [[ "$TICKET_ID" =~ ^[0-9]+$ ]]; then
+  echo "Ervenytelen work package ID: $TICKET_ID" >&2
+  exit 1
+fi
+
+VERSIONS_JSON=$("$LIB_DIR"/get_versions_json)
+VERSION_ID=$(resolve_version_id "$VERSIONS_JSON" "$VERSION_QUERY")
+
+if [ "$VERSION_ID" = "__AMBIGUOUS__" ]; then
+  echo "A verzio megadasa nem egyertelmu: $VERSION_QUERY" >&2
+  echo "Szurj pontosabban, vagy ellenorizd: op versions \"$VERSION_QUERY\"" >&2
+  exit 1
+fi
+
+if [ -z "$VERSION_ID" ]; then
+  echo "Nem talalhato verzio: $VERSION_QUERY" >&2
+  echo "Elerheto verziok: op versions" >&2
+  exit 1
+fi
+
+LOCK_VERSION=$("$LIB_DIR"/api_get "/api/v3/work_packages/$TICKET_ID" | jq -r '.lockVersion')
+if [ -z "$LOCK_VERSION" ] || [ "$LOCK_VERSION" = "null" ]; then
+  echo "Nem sikerult lekerdezni a lockVersion erteket a jegyhez (#$TICKET_ID)" >&2
+  exit 1
+fi
+
+PAYLOAD=$(jq -nc --argjson lv "$LOCK_VERSION" --arg vid "$VERSION_ID" '{
+  lockVersion: $lv,
+  _links: {
+    version: {
+      href: ("/api/v3/versions/" + $vid)
+    }
+  }
+}')
+
+RESPONSE=$("$LIB_DIR"/api_patch "/api/v3/work_packages/$TICKET_ID" "$PAYLOAD")
+
+UPDATED_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
+if [ -z "$UPDATED_ID" ]; then
+  echo "$RESPONSE" >&2
+  exit 1
+fi
+
+echo "$RESPONSE" | jq -c '{
+  id,
+  title: .subject,
+  version: (._links.version.title // ""),
+  versionId: ((._links.version.href // "") | capture("/versions/(?<id>[0-9]+)$").id)
+}'

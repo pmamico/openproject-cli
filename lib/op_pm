@@ -1,0 +1,284 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+BASE_URL="${OP_BASE_URL%/}"
+
+if [ "$1" == "--summary" ]; then
+  echo "Projektmenedzsment nezet egy projektre JSON-ban"
+  exit 0
+fi
+
+if [ "$1" == "--desc" ]; then
+  echo "op pm <projekt>: Projekt board, roadmap es projekt-szintu time entry bontas JSON kimenettel. A projekt megadhato id-val, identifierrel vagy nevreszlettel."
+  exit 0
+fi
+
+usage() {
+  echo "Hasznalat: op pm <projekt>" >&2
+  exit 1
+}
+
+if [ "$#" -lt 1 ]; then
+  usage
+fi
+
+PROJECT_QUERY="$*"
+
+resolve_project() {
+  local query="$1"
+  local projects_json candidates_json count
+
+  projects_json="$("$LIB_DIR"/op_project_list)" || return 1
+
+  candidates_json="$({
+    printf '%s' "$projects_json" | jq --arg q "$query" '
+      def norm: ascii_downcase;
+
+      [ .[]
+        | select(
+            ((.id | tostring) == $q)
+            or ((.identifier // "" | norm) == ($q | norm))
+            or ((.name // "" | norm) == ($q | norm))
+          )
+      ] as $exact
+      | if ($exact | length) > 0 then
+          $exact
+        else
+          [ .[]
+            | select(
+                ((.identifier // "" | norm) | contains($q | norm))
+                or ((.name // "" | norm) | contains($q | norm))
+              )
+          ]
+        end
+      | unique_by(.id)
+      | map({ project_id: .id, project_identifier: .identifier, project_name: .name })
+    '
+  })"
+
+  count="$(printf '%s' "$candidates_json" | jq 'length')"
+
+  if [ "$count" -eq 0 ]; then
+    echo "Nincs projekt talalat: $query" >&2
+    return 1
+  fi
+
+  if [ "$count" -gt 1 ]; then
+    echo "A projekt megadasa nem egyertelmu: $query" >&2
+    printf '%s\n' "$candidates_json" | jq >&2
+    return 1
+  fi
+
+  printf '%s\n' "$candidates_json" | jq '.[0]'
+}
+
+fetch_paginated_elements() {
+  local query="$1"
+  local tmp_file response next_href
+
+  tmp_file="$(mktemp)"
+  next_href="$query"
+
+  while [ -n "$next_href" ]; do
+    response="$("$LIB_DIR"/api_get "$next_href")"
+
+    if [ -z "$response" ]; then
+      rm -f "$tmp_file"
+      echo "Nem erkezett valasz az API-tol: $query" >&2
+      exit 1
+    fi
+
+    if printf '%s' "$response" | jq -e '._type? == "Error"' >/dev/null 2>&1; then
+      rm -f "$tmp_file"
+      echo "API hiba a lekeres soran: $query" >&2
+      printf '%s\n' "$response" | jq >&2
+      exit 1
+    fi
+
+    printf '%s' "$response" | jq -c '._embedded.elements // []' >> "$tmp_file"
+    next_href="$(printf '%s' "$response" | jq -r '._links.nextByOffset.href // empty')"
+  done
+
+  jq -s 'add // []' "$tmp_file"
+  rm -f "$tmp_file"
+}
+
+PROJECT_JSON="$(resolve_project "$PROJECT_QUERY")" || exit 1
+PROJECT_ID="$(printf '%s' "$PROJECT_JSON" | jq -r '.project_id')"
+
+WORK_PACKAGE_FILTERS="$(jq -nc --arg pid "$PROJECT_ID" '[
+  {"status_id":{"operator":"o","values":[]}},
+  {"project_id":{"operator":"=","values":["\($pid)"]}}
+]')"
+WORK_PACKAGE_FILTERS_ENC="$(printf '%s' "$WORK_PACKAGE_FILTERS" | jq -sRr @uri)"
+
+TIME_ENTRY_FILTERS="$(jq -nc --arg pid "$PROJECT_ID" '[
+  {"project":{"operator":"=","values":["\($pid)"]}}
+]')"
+TIME_ENTRY_FILTERS_ENC="$(printf '%s' "$TIME_ENTRY_FILTERS" | jq -sRr @uri)"
+
+WORK_PACKAGES_JSON="$(fetch_paginated_elements "/api/v3/work_packages?pageSize=200&filters=$WORK_PACKAGE_FILTERS_ENC")"
+VERSIONS_JSON="$(fetch_paginated_elements "/api/v3/projects/$PROJECT_ID/versions?pageSize=200")"
+TIME_ENTRIES_JSON="$(fetch_paginated_elements "/api/v3/time_entries?pageSize=200&filters=$TIME_ENTRY_FILTERS_ENC")"
+
+jq -n \
+  --arg base "$BASE_URL" \
+  --argjson project "$PROJECT_JSON" \
+  --argjson workPackages "$WORK_PACKAGES_JSON" \
+  --argjson versions "$VERSIONS_JSON" \
+  --argjson timeEntries "$TIME_ENTRIES_JSON" '
+  def iso_to_hours:
+    (. // "") as $val
+    | if ($val | test("^PT(?=[0-9.]+[HMS])(?:[0-9]+(?:\\.[0-9]+)?H)?(?:[0-9]+(?:\\.[0-9]+)?M)?(?:[0-9]+(?:\\.[0-9]+)?S)?$")) then
+        (($val | capture("^PT(?:(?<h>[0-9]+(?:\\.[0-9]+)?)H)?(?:(?<m>[0-9]+(?:\\.[0-9]+)?)M)?(?:(?<s>[0-9]+(?:\\.[0-9]+)?)S)?$")) as $d
+        | (($d.h // "0") | tonumber)
+          + ((($d.m // "0") | tonumber) / 60)
+          + ((($d.s // "0") | tonumber) / 3600))
+      else
+        0
+      end;
+
+  def href_id($href):
+    if ($href // null) == null then null else ($href | split("/") | last | tonumber?) end;
+
+  def wp_version_key:
+    if .versionId == null then "__none__" else (.versionId | tostring) end;
+
+  def user_key:
+    [(.user.name // ""), ((.user.id // 0) | tostring)] | join("#");
+
+  def sort_versions:
+    sort_by(
+      if .versionId == null then [1, "", 999999999]
+      else [0, (.versionName // ""), (.versionId // 0)]
+      end
+    );
+
+  ($timeEntries | map({
+      workPackageId: (href_id(._links.workPackage.href) // href_id(._links.entity.href)),
+      hours: ((.hours // null) | iso_to_hours)
+    })
+    | map(select(.workPackageId != null))
+    | sort_by(.workPackageId)
+    | group_by(.workPackageId)
+    | map({ key: (.[0].workPackageId | tostring), value: ((map(.hours) | add) // 0) })
+    | from_entries
+  ) as $spentByWorkPackage
+  | ($workPackages | map({
+    id,
+    subject: (.subject // ""),
+    status: (._links.status.title // ""),
+    assignee: {
+      id: href_id(._links.assignee.href),
+      name: (._links.assignee.title // "")
+    },
+    spentHours: ($spentByWorkPackage[(.id | tostring)] // ((.spentTime // null) | iso_to_hours)),
+    versionId: href_id(._links.version.href),
+    versionName: (._links.version.title // ""),
+    priority: (._links.priority.title // ""),
+    percentageDone: (.percentageDone // 0),
+    type: (._links.type.title // ""),
+    link: ($base + "/work_packages/" + (.id | tostring))
+  })) as $items
+  | ($versions | map({
+      id,
+      name: (.name // ""),
+      status: (.status // ""),
+      startDate: (.startDate // ""),
+      endDate: (.endDate // "")
+    }) | sort_by([.name, .id])) as $roadmap
+  | ($items
+      | sort_by([wp_version_key, .id])
+      | group_by(wp_version_key)
+      | map(
+          . as $group
+          | {
+              versionId: ($group[0].versionId // null),
+              versionName: (if ($group[0].versionId // null) == null then "No version" else ($group[0].versionName // "") end),
+              roadmap: ($roadmap | map(select(.id == ($group[0].versionId // -1))) | .[0]? // null),
+              workPackages: ($group | sort_by(.id)),
+              totals: {
+                workPackageCount: ($group | length),
+                spentHours: (($group | map(.spentHours) | add) // 0)
+              }
+            }
+        )
+      | sort_versions
+    ) as $boardVersions
+  | ($timeEntries | map({
+      id,
+      spentOn: (.spentOn // ""),
+      hours: ((.hours // null) | iso_to_hours),
+      comment: (.comment.raw // .comment.html // .comment.plain // ""),
+      user: {
+        id: href_id(._links.user.href),
+        name: (._links.user.title // "Unknown")
+      },
+      workPackage: {
+        id: (href_id(._links.workPackage.href) // href_id(._links.entity.href)),
+        subject: (._links.workPackage.title // ._links.entity.title // "")
+      }
+    })) as $entries
+  | {
+      project: $project,
+      board: {
+        versions: $boardVersions,
+        totals: {
+          workPackageCount: ($items | length),
+          spentHours: (($items | map(.spentHours) | add) // 0)
+        }
+      },
+      roadmap: ($roadmap | map(
+        . as $version
+        | {
+            id: $version.id,
+            name: $version.name,
+            status: $version.status,
+            startDate: $version.startDate,
+            endDate: $version.endDate,
+            board: (
+              $boardVersions
+              | map(select(.versionId == $version.id))
+              | .[0]? 
+              | if . == null then
+                  { workPackageCount: 0, spentHours: 0 }
+                else
+                  .totals
+                end
+            )
+          }
+      )),
+      timeEntries: {
+        totals: {
+          entryCount: ($entries | length),
+          hours: (($entries | map(.hours) | add) // 0)
+        },
+        entries: $entries,
+        byPersonByDay: (
+          $entries
+          | sort_by([user_key, .spentOn, .id])
+          | group_by(user_key)
+          | map(
+              . as $userEntries
+              | {
+                  user: $userEntries[0].user,
+                  totalHours: (($userEntries | map(.hours) | add) // 0),
+                  days: (
+                    $userEntries
+                    | sort_by([.spentOn, .id])
+                    | group_by(.spentOn)
+                    | map({
+                        date: .[0].spentOn,
+                        totalHours: ((map(.hours) | add) // 0),
+                        entries: (sort_by(.id))
+                      })
+                    | sort_by(.date)
+                  )
+                }
+            )
+          | sort_by(.user.name)
+        )
+      }
+    }
+ '

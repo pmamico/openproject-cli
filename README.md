@@ -51,9 +51,12 @@ This creates a local `.op_info` file containing the selected OpenProject project
 | `op help` | List available operations discovered from `lib/op_*` scripts | - |
 | `op init <query>` | Link the current directory to an OpenProject project via `.op_info` | - |
 | `op project_list` | List all visible projects with `id`, `identifier`, `name`, `active`, and `public` | `PAGE_SIZE` environment variable |
-| `op list` | List open work packages assigned to you, grouped by project | `--team`, `--table` |
+| `op list` | List open work packages assigned to you, grouped by project | `--team`, `--table`, `--version=<id|name>` |
+| `op versions [query]` | List available versions, optionally filtered by ID or name fragment | Uses `.op_info` project context when present |
+| `op pm <project>` | Project-management JSON view for a project | Accepts project ID, identifier, or name fragment |
+| `op set_version <id> <version>` | Assign a work package to a version by version ID or name | Version can be a numeric ID or name |
 | `op review` | Interactively review tickets and update status, priority, or completion | Same as `op list`, except `--table` |
-| `op status [id]` | Show detailed work package metadata by explicit ID or current Git branch | - |
+| `op status [id]` | Show detailed work package metadata by explicit ID or current Git branch | Includes assigned version |
 | `op wip [id]` | Set a work package status to `in progress` | - |
 | `op close [id]` | Set a work package status to `closed` | - |
 | `op log <id> <hours> ["comment"]` | Log time on a specific work package | `--tegnap`, `--nap=YYYY-MM-DD` |
@@ -110,7 +113,45 @@ Use the `PAGE_SIZE` environment variable to override the default page size of `1
 
 Lists open work packages using the OpenProject REST API `filters` parameter. By default, it returns open tickets assigned to the current user. If the current directory has a `.op_info` file, the command also filters by that project.
 
-Use `--team` to remove the assignee filter and show all open team work packages. Use `--table` to render a readable ASCII table through `tabulate`; otherwise the output is grouped JSON by project.
+Each listed work package includes its assigned version name when one is set.
+
+Use `--team` to remove the assignee filter and show all open team work packages. Use `--version <id|name>` to restrict the result set to a specific version. Use `--table` to render a readable ASCII table through `tabulate`; otherwise the output is grouped JSON by project.
+
+### `op versions [query]`
+
+Lists available versions through the OpenProject versions API. When `.op_info` exists, the command lists the versions available in that project. Without `.op_info`, it falls back to globally visible versions.
+
+An optional query filters by exact ID, exact name, or partial name match.
+
+The JSON output contains:
+
+- `id`
+- `name`
+- `status`
+- `startDate`
+- `endDate`
+- `project`
+
+### `op pm <project>`
+
+Builds a project-scoped JSON payload for management views without relying on assigned-to-me filtering.
+
+The project argument is resolved by exact project ID, exact identifier, exact name, or partial match on identifier/name.
+
+The JSON output contains:
+
+- `project`: resolved project metadata
+- `board`: open work packages grouped by version, with status, assignee, and spent hours
+- `roadmap`: project versions enriched with current open-ticket counts and spent hours
+- `timeEntries`: all project time entries, including a `byPersonByDay` breakdown for later statistics or UI work
+
+### `op set_version <work_package_id> <version_id|version_name>`
+
+Assigns a work package to a version. The command resolves the version either by numeric ID or by name. For name-based matches, exact name is preferred; otherwise a unique partial match is accepted.
+
+The command first fetches the current work package `lockVersion`, then updates the work package with `PATCH` and the `_links.version.href` field.
+
+On success, it returns compact JSON with the work package ID, title, assigned version name, and version ID.
 
 ### `op review`
 
@@ -128,9 +169,9 @@ Approved changes are sent through the OpenProject API with `PATCH` requests.
 
 Shows key metadata for an explicit work package ID, or for the first numeric ID found in the current Git branch name when no ID is provided.
 
-The output now also includes the parent work package title and `parent_id` when the ticket is part of a hierarchy.
+The output now also includes the assigned version, plus the parent work package title and `parent_id` when the ticket is part of a hierarchy.
 
-Displayed fields include project, subject, optional parent, assignee, type, status, completion percentage, and spent time.
+Displayed fields include project, subject, assigned version, optional parent, assignee, type, status, completion percentage, and spent time.
 
 ### `op wip [work_package_id]`
 
@@ -265,6 +306,9 @@ Prints the full JSON response from the OpenProject `queries` endpoint. This is u
 op health
 op init my-project
 op list --table
+op versions
+op list --version "Release 2.4" --table
+op set_version 12345 "Release 2.4"
 op status
 op parent 12000
 op wip

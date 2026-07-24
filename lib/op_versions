@@ -1,0 +1,39 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+if [ "$1" == "--summary" ]; then
+  echo "Elerheto verziok/roadmapek listazasa"
+  exit 0
+fi
+
+if [ "$1" == "--desc" ]; then
+  echo "Az elerheto verziok listazasa. Ha van .op_info, az adott projektben hasznalhato verziokat mutatja. Opcionális kereses: ID vagy nevreszlet."
+  exit 0
+fi
+
+QUERY="$*"
+VERSIONS_JSON=$("$LIB_DIR"/get_versions_json)
+
+if [ -n "$QUERY" ]; then
+  VERSIONS_JSON=$(echo "$VERSIONS_JSON" | jq --arg q "$QUERY" '
+    map(select(
+      ((.id | tostring) == $q)
+      or
+      ((.name // "" | ascii_downcase) | contains($q | ascii_downcase))
+    ))
+  ')
+fi
+
+echo "$VERSIONS_JSON" | jq '
+  map({
+    id,
+    name,
+    status: (.status // ""),
+    startDate: (.startDate // ""),
+    endDate: (.endDate // ""),
+    project: (._links.definingProject.title // "")
+  })
+  | sort_by([.project, .name, .id])
+'

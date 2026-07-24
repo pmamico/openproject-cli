@@ -27,15 +27,16 @@ else
   fi
 fi
 
-"$LIB_DIR"/api_get "/api/v3/work_packages/$TICKET_ID" | jq "
+"$LIB_DIR"/api_get "/api/v3/work_packages/$TICKET_ID" | jq '
 {
   projekt:      ._links.project.title,
   cim:          .subject,
   parent:       ._links.parent.title,
   parent_id:    ((._links.parent.href // "") | split("/") | last | if test("^[0-9]+$") then . else null end),
+  verzio:       (._links.version.title // ""),
   assignee:     ._links.assignee.title,
   tipus:        ._links.type.title,
-  status:          ._links.status.title,
+  status:       ._links.status.title,
   elorehaladas: .percentageDone,
   raforditas_ora: .spentTime
-}"
+}'
