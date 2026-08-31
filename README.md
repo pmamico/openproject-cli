@@ -62,7 +62,7 @@ This creates a local `.op_info` file containing the selected OpenProject project
 | `op log <id> <hours> ["comment"]` | Log time on a specific work package | `--tegnap`, `--nap=YYYY-MM-DD` |
 | `op report [YYYY-MM-DD]` | Print your time entries for a day as grouped JSON | `--table`, optional date |
 | `op calendar [--json] [month]` | Show a monthly worklog calendar as ASCII or JSON | `--json`, `-1`, `02`, `jan`, `2024.11` |
-| `op create "Title" ["Description"]` | Create a new work package assigned to you | `--projectId=<id>`, `--parentId=<id>` |
+| `op create "Title" ["Description"]` | Create a new work package assigned to you | `--projectId=<id>`, `--parentId=<id>`, `--branch` |
 | `op parent <parent_id>` | Set the current branch ticket's parent | - |
 | `op parent <id> <parent_id>` | Set a specific work package's parent | - |
 | `op rename <id> "New title"` | Rename a work package by explicit ID | - |
@@ -100,6 +100,10 @@ When exactly one project matches, it writes a `.op_info` file with:
 - `project_id`
 - `project_identifier`
 - `project_name`
+- `version_id`
+- `version_name`
+
+`version_id` and `version_name` are initialized as `null`. If `version_id` is later filled in, `op create` automatically assigns newly created work packages to that version when using the same `.op_info` project context.
 
 If multiple projects match, the command lists the candidates and leaves the directory unchanged.
 
@@ -234,9 +238,9 @@ Month selection:
 
 Use `--json` for machine-readable output. The JSON response contains month metadata, daily sums in `daySums`, and weekly breakdowns in `weeks[].days[]` with date, weekday, and hours.
 
-### `op create "Title" ["Description"] [--projectId=<id>] [--parentId=<id>]`
+### `op create "Title" ["Description"] [--projectId=<id>] [--parentId=<id>] [--branch]`
 
-Creates a new work package and assigns it to the current user.
+Creates a new `Task` work package and assigns it to the current user.
 
 Project selection order:
 
@@ -245,7 +249,9 @@ Project selection order:
 
 Use `--parentId=<id>` or `--parentId <id>` to create the work package directly under an existing parent work package.
 
-The command resolves the current user via `/api/v3/users/me`, sends the optional Markdown description and parent link when provided, and prints compact JSON with `id`, `title`, `status`, and `parentId` on success.
+Use `--branch` to immediately create a Git branch in the form `task/<id>-<slug>` and an empty commit with subject `OP#<id> <ASCII title>` plus the work package URL in the commit body.
+
+The command resolves the current user via `/api/v3/users/me`, resolves the project's `Task` type via `/api/v3/projects/<id>/types`, and, when `.op_info.version_id` is set for the same project context, also assigns the new work package to that version. It sends the optional Markdown description and parent link when provided, and prints compact JSON with `id`, `title`, `status`, `parentId`, and `url` on success. When `--branch` is used, the JSON also includes `branch`.
 
 ### `op parent <parent_id>`
 

@@ -11,14 +11,41 @@ if [ "${1:-}" == "--summary" ]; then
 fi
 
 if [ "${1:-}" == "--desc" ]; then
-  echo "Használat: op create \"Cím\" [\"Leírás\"] [--projectId=<id>] [--parentId=<id>] — Alapból .op_info projektet használ, --projectId-val felülírható."
+  echo "Használat: op create \"Cím\" [\"Leírás\"] [--projectId=<id>] [--parentId=<id>] [--branch] — Alapból .op_info projektet használ, --projectId-val felülírható."
   exit 0
 fi
+
+function normalize_ascii_text() {
+  if command -v iconv >/dev/null 2>&1; then
+    printf '%s' "$1" | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null || printf '%s' "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+function slugify() {
+  local normalized
+  normalized="$(normalize_ascii_text "$1")"
+
+  normalized="$(printf '%s' "$normalized" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
+
+  if [ -z "$normalized" ]; then
+    normalized="ticket"
+  fi
+
+  printf '%s' "$normalized"
+}
 
 # Args
 PROJECT_ID_OVERRIDE=""
 PARENT_ID=""
+CREATE_BRANCH="false"
 POSITIONAL=()
+OP_INFO_PATH=".op_info"
+OP_INFO_PROJECT_ID=""
+OP_INFO_VERSION_ID=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -46,6 +73,10 @@ while [ $# -gt 0 ]; do
       PARENT_ID="$2"
       shift 2
       ;;
+    --branch)
+      CREATE_BRANCH="true"
+      shift
+      ;;
     --*)
       echo "Ismeretlen kapcsoló: $1" >&2
       exit 1
@@ -58,7 +89,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ ${#POSITIONAL[@]} -lt 1 ] || [ ${#POSITIONAL[@]} -gt 2 ]; then
-  echo "Használat: op create \"Cím\" [\"Leírás\"] [--projectId=<id>] [--parentId=<id>]" >&2
+  echo "Használat: op create \"Cím\" [\"Leírás\"] [--projectId=<id>] [--parentId=<id>] [--branch]" >&2
   exit 1
 fi
 
@@ -69,7 +100,6 @@ DESC="${POSITIONAL[1]:-}"
 if [ -n "$PROJECT_ID_OVERRIDE" ]; then
   PROJECT_ID="$PROJECT_ID_OVERRIDE"
 else
-  OP_INFO_PATH=".op_info"
   if [ ! -f "$OP_INFO_PATH" ]; then
     echo "Hiányzik a projekt beállítás (.op_info). Add meg a projektet: --projectId=<id> vagy futtasd: op init" >&2
     exit 1
@@ -80,6 +110,16 @@ else
     echo "Hibás .op_info (project_id hiányzik). Futtasd újra: op init, vagy add meg: --projectId=<id>" >&2
     exit 1
   fi
+fi
+
+if [ -f "$OP_INFO_PATH" ]; then
+  OP_INFO_PROJECT_ID="$(jq -r '.project_id // empty' "$OP_INFO_PATH" 2>/dev/null || true)"
+  OP_INFO_VERSION_ID="$(jq -r '.version_id // empty' "$OP_INFO_PATH" 2>/dev/null || true)"
+fi
+
+if [ -n "$OP_INFO_VERSION_ID" ] && ! [[ "$OP_INFO_VERSION_ID" =~ ^[0-9]+$ ]]; then
+  echo "Hibás .op_info (version_id nem numerikus): $OP_INFO_VERSION_ID" >&2
+  exit 1
 fi
 
 if ! [[ "$PROJECT_ID" =~ ^[0-9]+$ ]]; then
@@ -100,18 +140,37 @@ if [ -z "$ME_ID" ] || [ "$ME_ID" = "null" ]; then
   exit 1
 fi
 
+# Resolve Task type in the target project
+TYPES_JSON="$("$LIB_DIR"/api_get "/api/v3/projects/$PROJECT_ID/types" 2>/dev/null || true)"
+TYPE_HREF="$(echo "$TYPES_JSON" | jq -r 'first(
+  ._embedded.elements[]?
+  | select((((.name? // "") | ascii_downcase) == "task") or (((.name? // "") | ascii_downcase) == "tasks"))
+  | ._links.self.href
+) // empty')"
+if [ -z "$TYPE_HREF" ] || [ "$TYPE_HREF" = "null" ]; then
+  echo "A projektben nem található Task típusú work package." >&2
+  exit 1
+fi
+
 # Build payload (description and parent are optional)
 PAYLOAD="$(jq -n \
   --arg subject "$SUBJECT" \
   --arg desc "$DESC" \
   --arg assignee "/api/v3/users/$ME_ID" \
+  --arg typeHref "$TYPE_HREF" \
+  --arg versionId "$OP_INFO_VERSION_ID" \
+  --arg opInfoProjectId "$OP_INFO_PROJECT_ID" \
+  --arg projectId "$PROJECT_ID" \
   --arg parentId "$PARENT_ID" \
   '{
     subject: $subject,
     _links: {
+      type: { href: $typeHref },
       assignee: { href: $assignee }
     } + (if $parentId != "" then {
       parent: { href: ("/api/v3/work_packages/" + $parentId) }
+    } else {} end) + (if $versionId != "" and $opInfoProjectId == $projectId then {
+      version: { href: ("/api/v3/versions/" + $versionId) }
     } else {} end)
   }
   + (if $desc != "" then {
@@ -136,4 +195,25 @@ if [ -z "$ID" ] || [ "$ID" = "null" ]; then
 fi
 
 # Output required compact JSON
-echo "$RESP" | jq -c '{ id: .id, title: .subject, status: ._links.status.title, parentId: ((._links.parent.href // "") | split("/") | last | if test("^[0-9]+$") then . else null end) }'
+BASE_URL="${OP_BASE_URL%/}"
+WORK_PACKAGE_URL="$(echo "$RESP" | jq -r --arg baseUrl "$BASE_URL" '($baseUrl + ((._links.self.href? // ("/work_packages/" + (.id | tostring))) | sub("^/api/v3"; "")))')"
+
+if [ "$CREATE_BRANCH" = "true" ]; then
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "A --branch használatához git repository szükséges. A work package létrejött: #$ID $WORK_PACKAGE_URL" >&2
+    exit 1
+  fi
+
+  BRANCH_NAME="task/$ID-$(slugify "$SUBJECT")"
+  COMMIT_SUBJECT="$(normalize_ascii_text "$SUBJECT")"
+
+  git checkout -b "$BRANCH_NAME" >&2
+  git commit --allow-empty -m "OP#$ID $COMMIT_SUBJECT" -m "$WORK_PACKAGE_URL" >&2
+fi
+
+echo "$RESP" | jq -c \
+  --arg baseUrl "$BASE_URL" \
+  --arg branchName "${BRANCH_NAME:-}" \
+  --arg createdBranch "$CREATE_BRANCH" \
+  '{ id: .id, title: .subject, status: ._links.status.title, parentId: (((._links.parent.href? // empty) | tostring | split("/") | last | select(test("^[0-9]+$"))) // null), url: ($baseUrl + ((._links.self.href? // ("/work_packages/" + (.id | tostring))) | sub("^/api/v3"; ""))) }
+  + (if $createdBranch == "true" then { branch: $branchName } else {} end)'

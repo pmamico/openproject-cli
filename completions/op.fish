@@ -90,6 +90,7 @@ complete -c op -f -n '__fish_seen_subcommand_from prio' -l dry -d 'Tervezett mó
 
 # op create
 complete -c op -f -n '__fish_seen_subcommand_from create' -l projectId -r -a '(__op_project_ids)' -d 'Projekt ID felülírása .op_info helyett'
+complete -c op -f -n '__fish_seen_subcommand_from create' -l branch -d 'Létrehozás után git branch és üres commit készítése'
 
 # Dynamic positional suggestions
 complete -c op -f -n '__fish_seen_subcommand_from init pm' -a '(__op_project_queries)'

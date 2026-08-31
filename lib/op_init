@@ -90,7 +90,9 @@ echo "$PROJECT_OBJ" | jq -c --arg ident "$PROJECT_IDENTIFIER" --arg name "$PROJE
   {
     project_id: .id,
     project_identifier: $ident,
-    project_name: $name
+    project_name: $name,
+    version_id: null,
+    version_name: null
   }
 ' > "$TMP_FILE"
 
