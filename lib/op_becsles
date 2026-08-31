@@ -1,0 +1,105 @@
+#!/bin/bash
+
+# Interaktív becslésállítás az op_list látható jegyeire.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+LIB_DIR="$SCRIPT_DIR"
+
+if [ "$1" == "--summary" ]; then
+  echo "Interaktív becslésállítás: csak a jegy neve és work mezője látszik"
+  exit 0
+fi
+
+if [ "$1" == "--desc" ]; then
+  echo "Az op_list látható jegyein iterálva csak a nevet és a work becslést jeleníti meg, majd szükség esetén azonnal menti az új work értéket."
+  exit 0
+fi
+
+err() { echo "$*" >&2; }
+
+for command_name in jq "$LIB_DIR/api_get" "$LIB_DIR/api_patch" "$LIB_DIR/op_list"; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    err "Hiányzó parancs: $command_name"
+    exit 1
+  fi
+done
+
+exec 3</dev/tty 2>/dev/null || {
+  err "Nem található interaktív TTY. Futtasd terminálból."
+  exit 1
+}
+
+ask() {
+  local prompt="$1"
+  local output_variable="$2"
+  printf "%s" "$prompt"
+  IFS= read -r -u 3 "$output_variable"
+}
+
+# A becslésparancs is az op list szűrését használja, de a table kimenetet nem.
+LIST_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --table) ;;
+    *) LIST_ARGS+=("$arg") ;;
+  esac
+done
+
+LIST_JSON=$("$LIB_DIR/op_list" "${LIST_ARGS[@]}")
+FLAT_JSON=$(echo "$LIST_JSON" | jq -c '
+  to_entries
+  | map(.value | .[])
+  | sort_by(.id)
+') || exit 1
+COUNT=$(echo "$FLAT_JSON" | jq 'length')
+
+if [ "$COUNT" -eq 0 ]; then
+  echo "Nincs feldolgozható jegy."
+  exit 0
+fi
+
+echo "Összesen $COUNT jegy. Enter = kihagyás, 'q' = kilépés."
+echo
+
+i=0
+while [ "$i" -lt "$COUNT" ]; do
+  ITEM=$(echo "$FLAT_JSON" | jq -c ".[$i]")
+  ID=$(echo "$ITEM" | jq -r '.id')
+  SUBJECT=$(echo "$ITEM" | jq -r '.subject')
+  CURRENT_WORK=$(echo "$ITEM" | jq -r '.work // ""')
+
+  echo "$SUBJECT"
+  echo "  work: ${CURRENT_WORK:-"-"}"
+
+  ANSWER=""
+  ask "Új work (jelenlegi: '${CURRENT_WORK:-"-"}', Enter=nem változik): " ANSWER
+  case "$ANSWER" in
+    q|Q)
+      echo "Megszakítva."
+      exit 0
+      ;;
+    "")
+      echo
+      i=$((i+1))
+      continue
+      ;;
+  esac
+
+  LOCK_VERSION=$("$LIB_DIR/api_get" "/api/v3/work_packages/$ID" | jq -r '.lockVersion')
+  if [ -z "$LOCK_VERSION" ] || [ "$LOCK_VERSION" = "null" ]; then
+    err "Nem sikerült lockVersion-t lekérni (#$ID). Kihagyva."
+    i=$((i+1))
+    continue
+  fi
+
+  PAYLOAD=$(jq -nc --argjson lv "$LOCK_VERSION" --arg work "$ANSWER" \
+    '{lockVersion: $lv, estimatedTime: $work}')
+  if "$LIB_DIR/api_patch" "/api/v3/work_packages/$ID" "$PAYLOAD" >/dev/null; then
+    echo "Mentve."
+  else
+    err "Nem sikerült menteni (#$ID)."
+  fi
+  echo
+  i=$((i+1))
+done
+
+echo "Kész."

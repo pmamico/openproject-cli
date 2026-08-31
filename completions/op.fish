@@ -7,6 +7,7 @@ function __op_commands
             'project_list\tLátható projektek listázása JSON-ban' \
             'list\tNyitott jegyek listázása' \
             'review\tInteraktív jegyfelülvizsgálat' \
+            'becsles\tInteraktív becslésállítás' \
             'status\tJegy részletes állapota' \
             'wip\tJegy állapotának átállítása folyamatban státuszra' \
             'close\tJegy lezárása' \
@@ -76,9 +77,9 @@ complete -c op -f -n 'not __fish_seen_subcommand_from (__op_command_names) help'
 complete -c op -f -n '__fish_seen_subcommand_from (__op_command_names); and not __fish_seen_subcommand_from help' -a help -d 'Művelet részletes leírása'
 
 # Shared flags by operation
-complete -c op -f -n '__fish_seen_subcommand_from list review prio' -l team -d 'Csapat nézet (assignee szűrés nélkül)'
+complete -c op -f -n '__fish_seen_subcommand_from list review becsles prio' -l team -d 'Csapat nézet (assignee szűrés nélkül)'
 complete -c op -f -n '__fish_seen_subcommand_from list report' -l table -d 'Táblázatos kimenet'
-complete -c op -f -n '__fish_seen_subcommand_from list review' -l version -r -a '(__op_version_queries)' -d 'Szűrés verzió szerint (ID vagy név)'
+complete -c op -f -n '__fish_seen_subcommand_from list review becsles' -l version -r -a '(__op_version_queries)' -d 'Szűrés verzió szerint (ID vagy név)'
 
 # op log
 complete -c op -f -n '__fish_seen_subcommand_from log' -l tegnap -d 'Időnaplózás tegnapi dátummal'

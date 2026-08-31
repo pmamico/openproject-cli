@@ -51,11 +51,12 @@ This creates a local `.op_info` file containing the selected OpenProject project
 | `op help` | List available operations discovered from `lib/op_*` scripts | - |
 | `op init <query>` | Link the current directory to an OpenProject project via `.op_info` | - |
 | `op project_list` | List all visible projects with `id`, `identifier`, `name`, `active`, and `public` | `PAGE_SIZE` environment variable |
-| `op list` | List open work packages assigned to you, grouped by project | `--team`, `--table`, `--version=<id|name>` |
+| `op list` | List open work packages assigned to you, grouped by project, including the `work` estimate | `--team`, `--table`, `--version=<id|name>` |
 | `op versions [query]` | List available versions, optionally filtered by ID or name fragment | Uses `.op_info` project context when present |
 | `op pm <project>` | Project-management JSON view for a project | Accepts project ID, identifier, or name fragment |
 | `op set_version <id> <version>` | Assign a work package to a version by version ID or name | Version can be a numeric ID or name |
-| `op review` | Interactively review tickets and update status, priority, or completion | Same as `op list`, except `--table` |
+| `op review` | Interactively review tickets and update status, priority, completion, or `work` estimate | Same as `op list`, except `--table` |
+| `op becsles` | Interactively update only the `work` estimate on every visible ticket | Same filters as `op list` |
 | `op status [id]` | Show detailed work package metadata by explicit ID or current Git branch | Includes assigned version |
 | `op wip [id]` | Set a work package status to `in progress` | - |
 | `op close [id]` | Set a work package status to `closed` | - |
@@ -166,8 +167,13 @@ Editable fields:
 - Status by name or ID; `?` lists available statuses
 - Completion percentage via `percentageDone`
 - Priority by name or ID
+- Work estimate via `work` (`estimatedTime` in the OpenProject API)
 
 Approved changes are sent through the OpenProject API with `PATCH` requests.
+
+### `op becsles`
+
+Iterates over every ticket visible to `op list`. For each ticket it displays only the subject and current `work` estimate. Enter skips the ticket, `q` exits, and any other value is immediately saved as the new `estimatedTime` value without an additional confirmation prompt.
 
 ### `op status [work_package_id]`
 

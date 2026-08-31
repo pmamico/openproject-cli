@@ -128,9 +128,10 @@ ITEMS_RAW=$(echo "$DATA" | jq --arg base "$BASE_URL" '
       project: ._links.project.title,
       status: ._links.status.title,
       subject,
-      version: (._links.version.title // ""),
-      priority: (._links.priority.title // ""),
-      percentageDone: (.percentageDone // 0),
+       version: (._links.version.title // ""),
+       priority: (._links.priority.title // ""),
+       work: (.estimatedTime // ""),
+       percentageDone: (.percentageDone // 0),
       link: ($base + "/work_packages/" + (.id | tostring))
     })
   | sort_by([.project, .id])

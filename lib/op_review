@@ -1,18 +1,18 @@
 #!/bin/bash
 
 # Interactive review over items produced by op_list.
-# Lets you update: status, percentageDone, priority.
+# Lets you update: status, percentageDone, priority, work estimate.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 LIB_DIR="$SCRIPT_DIR"
 
 if [ "$1" == "--summary" ]; then
-  echo "Interaktív felülvizsgálat: az op_list által hozott jegyekre rákérdez, és módosítható a status, percentageDone, priority"
+  echo "Interaktív felülvizsgálat: az op_list által hozott jegyekre rákérdez, és módosítható a status, percentageDone, priority, work"
   exit 0
 fi
 
 if [ "$1" == "--desc" ]; then
-  echo "Az op_list kimenetén iterálva sorban megjeleníti a jegyeket, és lehetővé teszi a státusz, készültség (percentageDone) és prioritás módosítását."
+  echo "Az op_list kimenetén iterálva sorban megjeleníti a jegyeket, és lehetővé teszi a státusz, készültség (percentageDone), prioritás és becslés (work) módosítását."
   exit 0
 fi
 
@@ -123,12 +123,13 @@ lookup_in_map() {
 }
 
 # Build PATCH payload for a ticket (merge fields)
-# args: id status_id priority_id percent
+# args: id status_id priority_id percent work
 build_payload() {
   local ID="$1"
   local STATUS_ID="$2"
   local PRIORITY_ID="$3"
   local PERCENT="$4"
+  local WORK="$5"
 
   local LOCK_VERSION
   LOCK_VERSION=$("$LIB_DIR"/api_get "/api/v3/work_packages/$ID" | jq -r '.lockVersion')
@@ -144,6 +145,10 @@ build_payload() {
 
   if [ -n "$PERCENT" ]; then
     PAYLOAD=$(echo "$PAYLOAD" | jq --argjson pd "$PERCENT" '. + {percentageDone: $pd}')
+  fi
+
+  if [ -n "$WORK" ]; then
+    PAYLOAD=$(echo "$PAYLOAD" | jq --arg work "$WORK" '. + {estimatedTime: $work}')
   fi
 
   if [ -n "$STATUS_ID" ]; then
@@ -173,9 +178,10 @@ while [ "$i" -lt "$COUNT" ]; do
   CURR_STATUS=$(echo "$ITEM" | jq -r '.status')
   CURR_PRIORITY=$(echo "$ITEM" | jq -r '.priority // ""')
   CURR_DONE=$(echo "$ITEM" | jq -r '.percentageDone')
+  CURR_WORK=$(echo "$ITEM" | jq -r '.work // ""')
 
   echo "[$PROJECT] #$ID - $SUBJECT"
-  echo "  status: $CURR_STATUS | priority: ${CURR_PRIORITY:-"-"} | done: ${CURR_DONE}%"
+  echo "  status: $CURR_STATUS | priority: ${CURR_PRIORITY:-"-"} | done: ${CURR_DONE}% | work: ${CURR_WORK:-"-"}"
 
   # Ask whether to edit
   CH=""
@@ -246,14 +252,26 @@ while [ "$i" -lt "$COUNT" ]; do
     fi
   done
 
-  if [ -z "$NEW_STATUS_ID" ] && [ -z "$NEW_PERCENT" ] && [ -z "$NEW_PRIORITY_ID" ]; then
+  # --- WORK ESTIMATE ---
+  NEW_WORK=""
+  while true; do
+    W=""
+    ask "Work becslés (jelenlegi: '${CURR_WORK:-"-"}', Enter=nem változik): " W
+    if [ -z "$W" ]; then
+      break
+    fi
+    NEW_WORK="$W"
+    break
+  done
+
+  if [ -z "$NEW_STATUS_ID" ] && [ -z "$NEW_PERCENT" ] && [ -z "$NEW_PRIORITY_ID" ] && [ -z "$NEW_WORK" ]; then
     echo "Nincs változtatás."
     echo
     i=$((i+1))
     continue
   fi
 
-  PAYLOAD=$(build_payload "$ID" "$NEW_STATUS_ID" "$NEW_PRIORITY_ID" "$NEW_PERCENT") || {
+  PAYLOAD=$(build_payload "$ID" "$NEW_STATUS_ID" "$NEW_PRIORITY_ID" "$NEW_PERCENT" "$NEW_WORK") || {
     echo "Kihagyva (#$ID)."
     echo
     i=$((i+1))
